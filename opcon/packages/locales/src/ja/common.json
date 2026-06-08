@@ -1,0 +1,19 @@
+{
+  "itemsPerPage": "ページあたりのアイテム数",
+  "searchPlaceHolder": "検索",
+  "confirmCancel": "本当にキャンセルしますか?",
+  "detail": "詳細",
+  "count": "個数",
+  "addSelected": "選択追加",
+  "addAll": "すべて追加",
+  "removeSelected": "選択削除",
+  "removeAll": "すべて削除",
+  "confirm": "確認",
+  "cancel": "キャンセル",
+  "group": "グループ",
+  "site": "サイト",
+  "all": "すべて",
+  "selectGroup": "グループ選択",
+  "selectSite": "サイト選択",
+  "organizationName": "組織名"
+}

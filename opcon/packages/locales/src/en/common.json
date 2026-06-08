@@ -1,0 +1,19 @@
+{
+  "itemsPerPage": "items per page",
+  "searchPlaceHolder": "Search",
+  "confirmCancel": "Are you sure you want to cancel?",
+  "detail": "Detail",
+  "count": "Count",
+  "addSelected": "Add Selected",
+  "addAll": "Add All",
+  "removeSelected": "Remove Selected",
+  "removeAll": "Remove All",
+  "confirm": "Confirm",
+  "cancel": "Cancel",
+  "group": "Group",
+  "site": "Site",
+  "all": "All",
+  "selectGroup": "Select Group",
+  "selectSite": "Select Site",
+  "organizationName": "Organization Name"
+}

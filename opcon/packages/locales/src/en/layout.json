@@ -1,0 +1,19 @@
+{
+  "SideBar": {
+    "gnb": {
+      "ota": "OTA",
+      "ebme": "EBME",
+      "robot": "Robot Management",
+      "cms": "Contents Management",
+      "tms": "TMS",
+      "learning": "Learning"
+    }
+  },
+  "LanguageSelect": {
+    "button": "Language"
+  },
+  "Footer": {
+    "customerInquiry": "Customer Inquiry"
+  },
+  "loading": "Loading..."
+}

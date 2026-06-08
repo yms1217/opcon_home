@@ -1,0 +1,20 @@
+{
+  "SideBar": {
+    "gnb": {
+      "ota": "OTA",
+      "ebme": "EBME",
+      "robot": "ロボット管理",
+      "cms": "コンテンツ管理",
+      "tms": "TMS",
+      "learning": "学習"
+    }
+  },
+  "LanguageSelect": {
+    "button": "言語"
+  },
+  "Footer": {
+    "customerInquiry": "お客様問い合わせ",
+    "customerInquiry2": "お客様問い合わせ2"
+  },
+  "loading": "読み込み中..."
+}

@@ -1,0 +1,23 @@
+{
+  "name": "opcon",
+  "private": true,
+  "scripts": {
+    "build": "turbo run build",
+    "build:dev": "turbo run build:dev",
+    "build:qa": "turbo run build:qa",
+    "dev": "turbo run dev",
+    "preview": "turbo run preview --parallel",
+    "lint": "turbo run lint",
+    "format": "turbo run format",
+    "check-types": "turbo run check-types",
+    "add:app": "node scripts/add-app.js"
+  },
+  "devDependencies": {
+    "prettier": "^3.7.4",
+    "turbo": "^2.9.12"
+  },
+  "packageManager": "pnpm@10.30.3",
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,77 @@
+﻿import styled from 'styled-components'
+import StatusBadge from '../common/StatusBadge'
+
+const Table = styled.table`
+  width: 100%;
+  border-collapse: collapse;
+`
+
+const Th = styled.th`
+  padding: 12px 16px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-secondary-50, #848c9d);
+  border-bottom: 1px solid var(--color-secondary-20, #dadde2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+`
+
+const Tr = styled.tr`
+  &:hover {
+    background: rgba(255, 255, 255, 0.02);
+  }
+`
+
+const Td = styled.td`
+  padding: 14px 16px;
+  font-size: 13px;
+  color: var(--color-secondary-90, #262f44);
+  border-bottom: 1px solid var(--color-secondary-20, #dadde2);
+`
+
+const Count = styled.span`
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-secondary-90, #262f44);
+`
+
+const statusMap = {
+  '준비 완료': 'completed',
+  '진행 중': 'running',
+  '부족': 'failed',
+}
+
+const MOCK_DATA = [
+  { task: '신발 정리', episodes: 320, status: '준비 완료', minRequired: 200 },
+  { task: 'Pick & Place', episodes: 1800, status: '준비 완료', minRequired: 500 },
+  { task: '수건 접기', episodes: 45, status: '부족', minRequired: 200 },
+  { task: '제조 PoC', episodes: 120, status: '진행 중', minRequired: 300 },
+]
+
+export default function ReadinessByTask({ stats }) {
+  const data = stats || MOCK_DATA
+
+  return (
+    <Table>
+      <thead>
+        <tr>
+          <Th>Task</Th>
+          <Th>Episodes</Th>
+          <Th>최소 요구량</Th>
+          <Th>상태</Th>
+        </tr>
+      </thead>
+      <tbody>
+        {data.map((item) => (
+          <Tr key={item.task}>
+            <Td>{item.task}</Td>
+            <Td><Count>{item.episodes.toLocaleString()}</Count></Td>
+            <Td style={{ color: 'var(--color-secondary-50, #848c9d)' }}>{item.minRequired.toLocaleString()}</Td>
+            <Td><StatusBadge status={statusMap[item.status] || 'queued'} label={item.status} /></Td>
+          </Tr>
+        ))}
+      </tbody>
+    </Table>
+  )
+}
