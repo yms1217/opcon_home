@@ -2,6 +2,7 @@ import React, { createContext, useContext, useReducer } from 'react'
 
 const initialState = {
   selectedSource: null,
+  selectedTask: null,
 
   selectedTaskflow: null,
   executionConfig: {
@@ -24,6 +25,7 @@ const initialState = {
 
 const actions = {
   SET_SOURCE: 'SET_SOURCE',
+  SET_TASK: 'SET_TASK',
   SET_TASKFLOW: 'SET_TASKFLOW',
   SET_EXECUTION_CONFIG: 'SET_EXECUTION_CONFIG',
   SET_EXECUTION: 'SET_EXECUTION',
@@ -39,6 +41,8 @@ function reducer(state, action) {
   switch (action.type) {
     case actions.SET_SOURCE:
       return { ...state, selectedSource: action.payload }
+    case actions.SET_TASK:
+      return { ...state, selectedTask: action.payload }
     case actions.SET_TASKFLOW:
       return { ...state, selectedTaskflow: action.payload }
     case actions.SET_EXECUTION_CONFIG:
@@ -74,6 +78,7 @@ export function LearningProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState)
 
   const setSource = (source) => dispatch({ type: actions.SET_SOURCE, payload: source })
+  const setTask = (task) => dispatch({ type: actions.SET_TASK, payload: task })
   const setTaskflow = (taskflow) => dispatch({ type: actions.SET_TASKFLOW, payload: taskflow })
   const setExecutionConfig = (config) => dispatch({ type: actions.SET_EXECUTION_CONFIG, payload: config })
   const setExecution = (execution) => dispatch({ type: actions.SET_EXECUTION, payload: execution })
@@ -90,6 +95,7 @@ export function LearningProvider({ children }) {
       value={{
         state,
         setSource,
+        setTask,
         setTaskflow,
         setExecutionConfig,
         setExecution,

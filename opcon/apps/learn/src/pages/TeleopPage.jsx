@@ -2,6 +2,7 @@
 import styled from 'styled-components'
 import { getDevices, createTeleopSession } from '../services/dmApi'
 import { openForge } from '../services/forgeApi'
+import { useLearning } from '../context/LearningContext'
 import Card from '../components/common/Card'
 
 const Page = styled.div`
@@ -121,12 +122,30 @@ const PurposeChip = styled.button`
   transition: all 0.15s;
 `
 
+const LockedField = styled.div`
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--color-secondary-20, #dadde2);
+  background: var(--color-neutral-30, #f5f5f5);
+  color: var(--color-secondary-70, #555e72);
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+`
+
+const LockBadge = styled.span`
+  font-size: 11px;
+  color: var(--color-secondary-50, #848c9d);
+`
+
 const PURPOSES = ['Fine-tuning', 'Failure Recovery', 'Benchmark Dataset 생성']
 
 export default function TeleopPage() {
+  const { state } = useLearning()
   const [robots, setRobots] = useState([])
   const [config, setConfig] = useState({
-    task: '',
+    task: state.selectedTask || '',
     goalEpisodes: 10,
     robotId: '',
     purpose: '',
@@ -163,13 +182,20 @@ export default function TeleopPage() {
         <Form>
           <Field>
             <Label>Task 선택</Label>
-            <Select value={config.task} onChange={(e) => setConfig((c) => ({ ...c, task: e.target.value }))}>
-              <option value="">선택하세요</option>
-              <option value="신발 정리">신발 정리</option>
-              <option value="Pick & Place">Pick &amp; Place</option>
-              <option value="수건 접기">수건 접기</option>
-              <option value="제조 PoC">제조 PoC</option>
-            </Select>
+            {state.selectedTask ? (
+              <LockedField>
+                <span>{state.selectedTask}</span>
+                <LockBadge>🔒 학습 시작에서 설정됨</LockBadge>
+              </LockedField>
+            ) : (
+              <Select value={config.task} onChange={(e) => setConfig((c) => ({ ...c, task: e.target.value }))}>
+                <option value="">선택하세요</option>
+                <option value="신발 정리">신발 정리</option>
+                <option value="Pick & Place">Pick &amp; Place</option>
+                <option value="수건 접기">수건 접기</option>
+                <option value="제조 PoC">제조 PoC</option>
+              </Select>
+            )}
           </Field>
 
           <Field>

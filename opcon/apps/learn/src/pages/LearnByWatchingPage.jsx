@@ -8,7 +8,8 @@ import VideoUploader from '../components/lbw/VideoUploader'
 import MetadataForm from '../components/common/MetadataForm'
 import { ForgeLink } from '../components/common/ForgeEmbed'
 import Card from '../components/common/Card'
-import { createDataset, uploadToDataset } from '../services/forgeApi'
+import { createNasDataset, uploadToNas, sendNasToForge } from '../services/nasApi'
+import { useLearning } from '../context/LearningContext'
 
 const Page = styled.div`
   padding: 32px;
@@ -89,39 +90,54 @@ const StatusMsg = styled.div`
 const STEPS = ['영상 유형 선택', '활용 목적 선택', '품질 기대치', '영상 업로드']
 
 export default function LearnByWatchingPage() {
+  const { state } = useLearning()
   const [step, setStep] = useState(0)
   const [videoType, setVideoType] = useState(null)
   const [purposes, setPurposes] = useState([])
   const [files, setFiles] = useState([])
-  const [metadata, setMetadata] = useState({})
+  const [metadata, setMetadata] = useState({ taskName: state.selectedTask || '' })
   const [submitting, setSubmitting] = useState(false)
-  const [submitted, setSubmitted] = useState(false)
+  const [nasDataset, setNasDataset] = useState(null)
+  const [transferring, setTransferring] = useState(false)
+  const [transferred, setTransferred] = useState(false)
   const [submitError, setSubmitError] = useState(null)
-  const [datasetId, setDatasetId] = useState(null)
 
   const togglePurpose = (value) => {
     setPurposes((p) => p.includes(value) ? p.filter((x) => x !== value) : [...p, value])
   }
 
-  const handleSubmit = async () => {
+  const handleSaveToNas = async () => {
     if (files.length === 0) return
     setSubmitting(true)
     setSubmitError(null)
     try {
-      const ds = await createDataset({
+      const ds = await createNasDataset({
         name: metadata.taskName || `lbw-${Date.now()}`,
         source: 'lbw',
         videoType,
         purposes,
         ...metadata,
       })
-      await uploadToDataset(ds.id, files)
-      setDatasetId(ds.id)
-      setSubmitted(true)
+      await uploadToNas(ds.id, files)
+      setNasDataset(ds)
     } catch (e) {
       setSubmitError(e.message)
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  const handleSendToForge = async () => {
+    if (!nasDataset) return
+    setTransferring(true)
+    setSubmitError(null)
+    try {
+      await sendNasToForge(nasDataset.id)
+      setTransferred(true)
+    } catch (e) {
+      setSubmitError(e.message)
+    } finally {
+      setTransferring(false)
     }
   }
 
@@ -175,6 +191,7 @@ export default function LearnByWatchingPage() {
                   fields={METADATA_FIELDS}
                   values={metadata}
                   onChange={(key, val) => setMetadata((m) => ({ ...m, [key]: val }))}
+                  lockedKeys={state.selectedTask ? ['taskName'] : []}
                 />
               </div>
 
@@ -182,13 +199,13 @@ export default function LearnByWatchingPage() {
                 <h4 style={{ margin: '0 0 12px 0', fontSize: 14, color: 'var(--color-secondary-70, #555e72)' }}>
                   Forge 전송
                 </h4>
-                {!submitted ? (
+                {!nasDataset ? (
                   <>
                     <SubmitBtn
-                      onClick={handleSubmit}
+                      onClick={handleSaveToNas}
                       disabled={files.length === 0 || submitting}
                     >
-                      {submitting ? '전송 중...' : 'Forge로 전송 및 모션 추출 시작'}
+                      {submitting ? 'NAS 저장 중...' : 'NAS에 저장'}
                     </SubmitBtn>
                     {files.length === 0 && (
                       <p style={{ margin: '8px 0 0', fontSize: 12, color: 'var(--color-secondary-50, #848c9d)' }}>
@@ -197,14 +214,22 @@ export default function LearnByWatchingPage() {
                     )}
                     {submitError && <StatusMsg $type="error">오류: {submitError}</StatusMsg>}
                   </>
+                ) : !transferred ? (
+                  <>
+                    <StatusMsg>✅ NAS 저장 완료 (ID: {nasDataset.id})</StatusMsg>
+                    <SubmitBtn onClick={handleSendToForge} disabled={transferring} style={{ marginTop: 8 }}>
+                      {transferring ? 'Forge 전달 중...' : 'Forge로 전달 및 모션 추출 시작'}
+                    </SubmitBtn>
+                    {submitError && <StatusMsg $type="error" style={{ marginTop: 8 }}>오류: {submitError}</StatusMsg>}
+                  </>
                 ) : (
                   <>
-                    <StatusMsg>✅ 영상이 Forge로 전송되었습니다 (ID: {datasetId})</StatusMsg>
+                    <StatusMsg>✅ Forge 전달 완료</StatusMsg>
                     <div style={{ marginTop: 12 }}>
                       <ForgeLink
-                        path={`/data-generator/video-to-motion?datasetId=${datasetId}`}
+                        path={`/data-generator/video-to-motion?datasetId=${nasDataset.id}`}
                         title="Forge Video to Motion 보기"
-                        description="업로드된 영상에서 모션 데이터를 자동으로 추출합니다"
+                        description="전달된 영상에서 모션 데이터를 자동으로 추출합니다"
                       />
                     </div>
                   </>

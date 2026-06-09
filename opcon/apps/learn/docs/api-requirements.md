@@ -8,16 +8,27 @@
 
 ## 개요
 
-Learning App은 신규 백엔드를 만들지 않고 **기존 3개 백엔드를 직접 호출**합니다.
+Learning App은 신규 백엔드를 만들지 않고 **기존 백엔드를 직접 호출**합니다.
+
+### 데이터 흐름
+
+```
+데이터 수집 → NAS 서버 (데이터 센터 내 저장) → Forge (학습 플랫폼으로 전달) → 학습 실행
+```
+
+모든 raw data(episode, 영상, 업로드 파일)는 NAS 서버에 먼저 저장됩니다.  
+NAS에 저장된 데이터는 Learning App의 "Forge로 전달" 요청에 의해 학습 플랫폼으로 전달됩니다.
+
+### 백엔드 구성
 
 | 백엔드 | 담당 | 환경 변수 |
 |---|---|---|
 | **TMS 백엔드** | 기존 TMS 팀 | `VITE_API_BASE_URL` |
 | **DM 백엔드** | 기존 DM 팀 | `VITE_API_BASE_URL` |
+| **NAS API** | 인프라/데이터 팀 (신규) | `VITE_NAS_BASE_URL` |
 | **Forge 플랫폼** | CNS | `VITE_FORGE_BASE_URL` |
 
-> TMS/DM API 호출 시 `VITE_API_BASE_URL` 을 베이스로 사용하고,
-> Forge API 호출 시 `VITE_FORGE_BASE_URL` 을 베이스로 사용합니다.
+> TMS/DM API는 `VITE_API_BASE_URL`, NAS API는 `VITE_NAS_BASE_URL`, Forge는 `VITE_FORGE_BASE_URL`을 베이스로 사용합니다.
 
 ---
 
@@ -25,6 +36,7 @@ Learning App은 신규 백엔드를 만들지 않고 **기존 3개 백엔드를 
 
 ```env
 VITE_API_BASE_URL=https://opcon-api.example.com     # TMS + DM 공용
+VITE_NAS_BASE_URL=https://nas.example.com            # NAS API 서버
 VITE_FORGE_BASE_URL=https://forge.example.com        # Forge 플랫폼
 VITE_USE_MOCK=false                                  # true 시 모든 API 호출을 Mock으로 대체
 ```
@@ -68,7 +80,157 @@ Content-Type: application/json
 
 ---
 
-## 1. TMS API
+## 1. NAS API ⭐ 신규
+
+**베이스 URL**: `{VITE_NAS_BASE_URL}`  
+**API 경로 접두사**: `/api`
+
+모든 raw data는 NAS에 먼저 저장됩니다. Learning App이 NAS API에 요구하는 엔드포인트입니다.
+
+---
+
+### 1.1 Dataset 생성 (메타데이터 등록)
+
+**Learning App 호출 위치**: UploadPage, LearnByWatchingPage — "NAS에 저장" 버튼
+
+```
+POST /api/datasets
+Content-Type: application/json
+```
+
+**요청 바디**:
+```json
+{
+  "name": "신발정리-upload-1749401234567",
+  "source": "upload",
+  "dataType": "Teleop dataset",
+  "taskName": "신발 정리",
+  "robotType": "RSP-7",
+  "modality": "vision",
+  "hasLabel": "yes",
+  "purpose": "fine-tuning"
+}
+```
+
+| 공통 필드 | 타입 | 필수 | 설명 |
+|---|---|---|---|
+| `name` | string | ✅ | Dataset 이름 |
+| `source` | string | ✅ | `tms` \| `upload` \| `lbw` \| `teleop` \| `simulation` |
+| `taskName` | string | | 관련 Task 이름 |
+
+**응답 예시**:
+```json
+{
+  "id": "nas-1749401234567",
+  "nasPath": "/datasets/nas-1749401234567",
+  "name": "신발정리-upload-1749401234567",
+  "source": "upload",
+  "createdAt": "2026-06-09T10:10:00Z"
+}
+```
+
+---
+
+### 1.2 파일 업로드 (NAS 직접 저장)
+
+**Learning App 호출 위치**: Dataset 생성 직후 (UploadPage, LearnByWatchingPage)
+
+```
+POST /api/datasets/:id/upload
+Content-Type: multipart/form-data
+```
+
+**요청**: `files` 필드에 파일 배열
+
+**응답 예시**:
+```json
+{
+  "success": true,
+  "nasDatasetId": "nas-1749401234567",
+  "uploadedCount": 3,
+  "totalSize": "142.5 MB",
+  "nasPath": "/datasets/nas-1749401234567/files"
+}
+```
+
+---
+
+### 1.3 TMS Episode → NAS 등록
+
+**Learning App 호출 위치**: TmsEpisodeCandidatePage — "NAS에 저장" 버튼
+
+TMS 백엔드가 보유한 episode 데이터를 NAS 경로로 복사/내보내는 요청입니다.
+
+```
+POST /api/datasets/from-episodes
+Content-Type: application/json
+```
+
+**요청 바디**:
+```json
+{
+  "executionId": "exec-2026-001",
+  "episodeIds": ["EP-001", "EP-003", "EP-005"]
+}
+```
+
+**응답 예시**:
+```json
+{
+  "id": "nas-tms-1749401234567",
+  "nasPath": "/episodes/exec-2026-001",
+  "episodeCount": 3,
+  "createdAt": "2026-06-09T10:15:00Z"
+}
+```
+
+> **구현 방식**: NAS API가 TMS 백엔드에서 episode 데이터를 pull하거나, TMS 백엔드가 NAS로 push하는 방식 중 선택. 어떤 방식이든 Learning App에서 이 API 호출 후 NAS에 데이터가 저장된 상태여야 합니다.
+
+---
+
+### 1.4 NAS → Forge 전달 트리거
+
+**Learning App 호출 위치**: NAS 저장 완료 후 "Forge로 전달" 버튼
+
+NAS에 저장된 dataset을 Forge가 학습에 사용할 수 있도록 전달합니다.
+
+```
+POST /api/datasets/:nasDatasetId/send-to-forge
+```
+
+**응답 예시**:
+```json
+{
+  "success": true,
+  "nasDatasetId": "nas-1749401234567",
+  "forgeDatasetId": "forge-nas-1749401234567"
+}
+```
+
+---
+
+### 1.5 NAS 데이터 통계 조회
+
+**Learning App 호출 위치**: LauncherPage 데이터 현황 요약, DataReadinessPage
+
+```
+GET /api/datasets/stats
+```
+
+**응답 예시**:
+```json
+{
+  "tms": { "count": 234, "accepted": 180, "pending": 34, "rejected": 20 },
+  "teleop": { "count": 1200 },
+  "lbw": { "videos": 89, "motions": 512 },
+  "simulation": { "count": 3400 },
+  "upload": { "count": 800 }
+}
+```
+
+---
+
+## 2. TMS API
 
 **베이스 URL**: `{VITE_API_BASE_URL}`
 
@@ -736,28 +898,30 @@ Learning App에서 Forge 화면을 새 탭으로 열 때 사용하는 경로 목
 
 ## 6. 우선순위 및 Phase 구분
 
-### Phase 1 필수 API (현재 구현)
+### Phase 1 필수 API
 
 | 우선순위 | API | 담당 |
 |---|---|---|
+| 🔴 높음 | `GET /taskflows` | TMS (Launcher Task 목록) |
 | 🔴 높음 | `GET /devices` | DM |
 | 🔴 높음 | `POST /teleop-sessions` | DM (신규) |
-| 🔴 높음 | `POST /api/datasets` | Forge |
-| 🔴 높음 | `POST /api/datasets/:id/upload` | Forge |
+| 🔴 높음 | `POST /api/datasets` | NAS (신규) |
+| 🔴 높음 | `POST /api/datasets/:id/upload` | NAS (신규) |
+| 🔴 높음 | `POST /api/datasets/:id/send-to-forge` | NAS (신규) |
+| 🔴 높음 | `GET /api/datasets/stats` | NAS (신규) |
 
 ### Phase 2 필수 API
 
 | 우선순위 | API | 담당 |
 |---|---|---|
-| 🔴 높음 | `GET /taskflows` | TMS |
 | 🔴 높음 | `POST /executions` | TMS |
 | 🔴 높음 | `GET /executions/:id` | TMS |
 | 🔴 높음 | `GET /executions/:executionId/episodes` | TMS |
 | 🔴 높음 | `PUT /episodes/:id/review-status` | TMS |
+| 🔴 높음 | `POST /api/datasets/from-episodes` | NAS (신규) |
 | 🟡 보통 | `GET /api/training-jobs` | Forge |
 | 🟡 보통 | `GET /api/models` | Forge |
 | 🟡 보통 | `PUT /api/models/:id/status` | Forge |
-| 🟢 낮음 | `GET /api/datasets/stats` | Forge |
 | 🟢 낮음 | `GET /executions/stats?purpose=learning` | TMS |
 
 ---

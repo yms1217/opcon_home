@@ -3,7 +3,9 @@ import styled from 'styled-components'
 import MetadataForm from '../components/common/MetadataForm'
 import { ForgeLink } from '../components/common/ForgeEmbed'
 import Card from '../components/common/Card'
-import { createDataset, uploadToDataset } from '../services/forgeApi'
+import { createNasDataset, uploadToNas, sendNasToForge } from '../services/nasApi'
+import { openForge } from '../services/forgeApi'
+import { useLearning } from '../context/LearningContext'
 
 const Page = styled.div`
   padding: 32px;
@@ -155,15 +157,17 @@ const METADATA_FIELDS = [
 ]
 
 export default function UploadPage() {
+  const { state } = useLearning()
   const [dataType, setDataType] = useState(null)
-  const [metadata, setMetadata] = useState({})
+  const [metadata, setMetadata] = useState({ taskName: state.selectedTask || '' })
   const [files, setFiles] = useState([])
   const [dragOver, setDragOver] = useState(false)
   const [formatCheck, setFormatCheck] = useState(null)
   const [submitting, setSubmitting] = useState(false)
-  const [submitted, setSubmitted] = useState(false)
+  const [nasDataset, setNasDataset] = useState(null)
+  const [transferring, setTransferring] = useState(false)
+  const [transferred, setTransferred] = useState(false)
   const [submitError, setSubmitError] = useState(null)
-  const [datasetId, setDatasetId] = useState(null)
   const inputRef = useRef(null)
 
   const addFiles = (newFiles) => {
@@ -172,24 +176,37 @@ export default function UploadPage() {
     setFormatCheck(arr.every((f) => f.name.endsWith('.json') || f.name.endsWith('.hdf5') || f.name.endsWith('.zip')))
   }
 
-  const handleSubmit = async () => {
+  const handleSaveToNas = async () => {
     if (!dataType || files.length === 0) return
     setSubmitting(true)
     setSubmitError(null)
     try {
-      const ds = await createDataset({
+      const ds = await createNasDataset({
         name: metadata.taskName || `upload-${Date.now()}`,
         source: 'upload',
         dataType,
         ...metadata,
       })
-      await uploadToDataset(ds.id, files)
-      setDatasetId(ds.id)
-      setSubmitted(true)
+      await uploadToNas(ds.id, files)
+      setNasDataset(ds)
     } catch (e) {
       setSubmitError(e.message)
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  const handleSendToForge = async () => {
+    if (!nasDataset) return
+    setTransferring(true)
+    setSubmitError(null)
+    try {
+      await sendNasToForge(nasDataset.id)
+      setTransferred(true)
+    } catch (e) {
+      setSubmitError(e.message)
+    } finally {
+      setTransferring(false)
     }
   }
 
@@ -216,6 +233,7 @@ export default function UploadPage() {
             fields={METADATA_FIELDS}
             values={metadata}
             onChange={(key, val) => setMetadata((m) => ({ ...m, [key]: val }))}
+            lockedKeys={state.selectedTask ? ['taskName'] : []}
           />
         </Section>
 
@@ -254,14 +272,14 @@ export default function UploadPage() {
         </Section>
 
         <Section>
-          <SectionTitle>Forge 전송</SectionTitle>
-          {!submitted ? (
+          <SectionTitle>NAS 저장 및 Forge 전달</SectionTitle>
+          {!nasDataset ? (
             <>
               <SubmitBtn
-                onClick={handleSubmit}
+                onClick={handleSaveToNas}
                 disabled={!dataType || files.length === 0 || formatCheck === false || submitting}
               >
-                {submitting ? '전송 중...' : 'Forge로 전송'}
+                {submitting ? 'NAS 저장 중...' : 'NAS에 저장'}
               </SubmitBtn>
               {!dataType && (
                 <p style={{ margin: '8px 0 0', fontSize: 12, color: 'var(--color-secondary-50, #848c9d)' }}>
@@ -270,14 +288,22 @@ export default function UploadPage() {
               )}
               {submitError && <StatusMsg $type="error">오류: {submitError}</StatusMsg>}
             </>
+          ) : !transferred ? (
+            <>
+              <StatusMsg>✅ NAS 저장 완료 (ID: {nasDataset.id})</StatusMsg>
+              <SubmitBtn onClick={handleSendToForge} disabled={transferring} style={{ marginTop: 12 }}>
+                {transferring ? 'Forge 전달 중...' : 'Forge로 전달'}
+              </SubmitBtn>
+              {submitError && <StatusMsg $type="error" style={{ marginTop: 8 }}>오류: {submitError}</StatusMsg>}
+            </>
           ) : (
             <>
-              <StatusMsg>✅ 데이터셋이 생성되어 Forge로 전송되었습니다 (ID: {datasetId})</StatusMsg>
+              <StatusMsg>✅ Forge 전달 완료</StatusMsg>
               <div style={{ marginTop: 12 }}>
                 <ForgeLink
-                  path={`/datasets/${datasetId}`}
+                  path={`/datasets/${nasDataset.id}`}
                   title="Forge Dataset 보기"
-                  description="생성된 데이터셋을 Forge에서 확인합니다"
+                  description="전달된 데이터셋을 Forge에서 확인합니다"
                 />
               </div>
             </>

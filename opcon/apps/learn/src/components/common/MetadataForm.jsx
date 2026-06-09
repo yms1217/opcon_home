@@ -57,13 +57,37 @@ const CheckRow = styled.label`
   padding-top: 4px;
 `
 
-export default function MetadataForm({ fields, values, onChange }) {
+const LockedValue = styled.div`
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--color-secondary-20, #dadde2);
+  background: var(--color-neutral-30, #f5f5f5);
+  color: var(--color-secondary-70, #555e72);
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+`
+
+const LockBadge = styled.span`
+  font-size: 11px;
+  color: var(--color-secondary-50, #848c9d);
+  white-space: nowrap;
+  margin-left: 8px;
+`
+
+export default function MetadataForm({ fields, values, onChange, lockedKeys = [] }) {
   return (
     <Form>
       {fields.map((field) => (
         <Field key={field.key}>
           <Label>{field.label}{field.required && ' *'}</Label>
-          {field.type === 'select' ? (
+          {lockedKeys.includes(field.key) ? (
+            <LockedValue>
+              <span>{values[field.key] || '—'}</span>
+              <LockBadge>🔒 학습 시작에서 설정됨</LockBadge>
+            </LockedValue>
+          ) : field.type === 'select' ? (
             <SelectField value={values[field.key] || ''} onChange={(e) => onChange(field.key, e.target.value)}>
               <option value="">선택하세요</option>
               {field.options.map((opt) => (

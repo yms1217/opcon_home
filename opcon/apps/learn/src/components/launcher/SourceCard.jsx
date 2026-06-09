@@ -100,12 +100,13 @@ const ICONS = {
   upload: '📤',
 }
 
-export default function SourceCard({ card }) {
+export default function SourceCard({ card, onNavigate }) {
   const navigate = useNavigate()
   const color = SOURCE_COLOR_MAP[card.id] || '#868E96'
+  const handleClick = () => onNavigate ? onNavigate(card.route) : navigate(card.route)
 
   return (
-    <CardWrapper $color={color} onClick={() => navigate(card.route)}>
+    <CardWrapper $color={color} onClick={handleClick}>
       <CardTop>
         <IconBox $color={color}>{ICONS[card.id] || '📌'}</IconBox>
         <CardTitle>{card.title}</CardTitle>

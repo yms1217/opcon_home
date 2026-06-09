@@ -5,6 +5,7 @@ import StepWizard from '../components/common/StepWizard'
 import TaskflowSelector from '../components/tms/TaskflowSelector'
 import ExecutionConfig from '../components/tms/ExecutionConfig'
 import { useTmsExecutions } from '../hooks/useTmsExecutions'
+import { useLearning } from '../context/LearningContext'
 import Card from '../components/common/Card'
 import StatusBadge from '../components/common/StatusBadge'
 
@@ -93,8 +94,23 @@ const ProgressFill = styled.div`
 
 const STEPS = ['Taskflow 선택', '실행 설정', '확인 및 실행', '실행 결과']
 
+const TaskContext = styled.div`
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  background: rgba(47,146,159,0.08);
+  border: 1px solid rgba(47,146,159,0.2);
+  font-size: 13px;
+  color: var(--color-primary-60, #2f929f);
+  font-weight: 600;
+  margin-bottom: 24px;
+`
+
 export default function TmsLearningPage() {
   const navigate = useNavigate()
+  const { state } = useLearning()
   const [step, setStep] = useState(0)
   const [taskflow, setTaskflow] = useState(null)
   const [config, setConfig] = useState({
@@ -128,6 +144,9 @@ export default function TmsLearningPage() {
     <Page>
       <PageTitle>학습용 TMS 실행</PageTitle>
       <PageSub>Taskflow를 선택하고 학습 데이터 수집을 위한 실행을 설정하세요</PageSub>
+      {state.selectedTask && (
+        <TaskContext>🎯 학습 Task: {state.selectedTask}</TaskContext>
+      )}
 
       <Card>
         <StepWizard
@@ -142,7 +161,7 @@ export default function TmsLearningPage() {
           nextLabel={step === 2 ? null : undefined}
         >
           {step === 0 && (
-            <TaskflowSelector selected={taskflow} onSelect={setTaskflow} />
+            <TaskflowSelector selected={taskflow} onSelect={setTaskflow} suggestedTask={state.selectedTask} />
           )}
 
           {step === 1 && (

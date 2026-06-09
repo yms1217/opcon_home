@@ -5,7 +5,8 @@ import FilterBar from '../components/common/FilterBar'
 import EpisodeCandidateList from '../components/tms/EpisodeCandidateList'
 import EpisodeReviewPanel from '../components/tms/EpisodeReviewPanel'
 import { useEpisodeCandidates } from '../hooks/useEpisodeCandidates'
-import { createDataset, uploadToDataset } from '../services/forgeApi'
+import { registerEpisodesOnNas, sendNasToForge } from '../services/nasApi'
+import { openForge } from '../services/forgeApi'
 
 const Page = styled.div`
   padding: 32px;
@@ -128,25 +129,41 @@ export default function TmsEpisodeCandidatePage() {
   const [selected, setSelected] = useState(null)
   const [filters, setFilters] = useState({})
   const [sending, setSending] = useState(false)
+  const [nasDataset, setNasDataset] = useState(null)
+  const [transferring, setTransferring] = useState(false)
+  const [transferred, setTransferred] = useState(false)
+  const [sendError, setSendError] = useState(null)
 
   const handleFilterChange = (key, value) => {
     setFilters((f) => ({ ...f, [key]: value || undefined }))
   }
 
-  const handleSendToForge = async () => {
+  const handleSaveToNas = async () => {
     const accepted = candidates.filter((ep) => reviewMap[ep.id] === 'accepted')
     if (accepted.length === 0) return
-
     setSending(true)
+    setSendError(null)
     try {
-      const dataset = await createDataset({ name: `TMS-${executionId}`, episodeIds: accepted.map((e) => e.id) })
-      await uploadToDataset(dataset.id, [])
-      alert(`Forge Dataset 생성 완료: ${dataset.id}`)
-      navigate('/learning/')
+      const result = await registerEpisodesOnNas(executionId, accepted.map((e) => e.id))
+      setNasDataset(result)
     } catch (e) {
-      alert('전송 실패: ' + e.message)
+      setSendError(e.message)
     } finally {
       setSending(false)
+    }
+  }
+
+  const handleSendToForge = async () => {
+    if (!nasDataset) return
+    setTransferring(true)
+    setSendError(null)
+    try {
+      await sendNasToForge(nasDataset.id)
+      setTransferred(true)
+    } catch (e) {
+      setSendError(e.message)
+    } finally {
+      setTransferring(false)
     }
   }
 
@@ -189,12 +206,43 @@ export default function TmsEpisodeCandidatePage() {
           <StatItem $color="#FF6B6B">제외:<span>{summary.rejected}</span></StatItem>
           <StatItem>총:<span>{summary.total}</span></StatItem>
         </SummaryStats>
-        <SendBtn
-          disabled={summary.accepted === 0 || sending}
-          onClick={handleSendToForge}
-        >
-          {sending ? '전송 중...' : `Forge로 Dataset 전송 (${summary.accepted}개)`}
-        </SendBtn>
+        {!nasDataset ? (
+          <>
+            <SendBtn
+              disabled={summary.accepted === 0 || sending}
+              onClick={handleSaveToNas}
+            >
+              {sending ? 'NAS 저장 중...' : `NAS에 저장 (${summary.accepted}개 Episode)`}
+            </SendBtn>
+            {sendError && (
+              <span style={{ fontSize: 12, color: '#FF6B6B', marginLeft: 12 }}>오류: {sendError}</span>
+            )}
+          </>
+        ) : !transferred ? (
+          <>
+            <span style={{ fontSize: 13, color: '#51CF66', marginRight: 12 }}>
+              ✅ NAS 저장 완료 (ID: {nasDataset.id})
+            </span>
+            <SendBtn onClick={handleSendToForge} disabled={transferring}>
+              {transferring ? 'Forge 전달 중...' : 'Forge로 전달'}
+            </SendBtn>
+            {sendError && (
+              <span style={{ fontSize: 12, color: '#FF6B6B', marginLeft: 12 }}>오류: {sendError}</span>
+            )}
+          </>
+        ) : (
+          <>
+            <span style={{ fontSize: 13, color: '#51CF66', marginRight: 12 }}>
+              ✅ Forge 전달 완료
+            </span>
+            <SendBtn onClick={() => openForge('/datasets')}>
+              Forge에서 보기 →
+            </SendBtn>
+            <SendBtn onClick={() => navigate('/learning/')} style={{ marginLeft: 8, background: 'var(--color-secondary-20, #dadde2)', color: 'var(--color-secondary-70, #555e72)' }}>
+              완료
+            </SendBtn>
+          </>
+        )}
       </SummaryBar>
     </Page>
   )

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getDatasetStats } from '../services/forgeApi'
+import { getNasDatasetStats } from '../services/nasApi'
 import { getLearningExecutionStats } from '../services/tmsApi'
 
 export function useDataReadiness() {
@@ -8,9 +8,9 @@ export function useDataReadiness() {
 
   useEffect(() => {
     setLoading(true)
-    Promise.all([getDatasetStats(), getLearningExecutionStats()])
-      .then(([forgeStats, tmsStats]) => {
-        setStats({ forge: forgeStats, tms: tmsStats })
+    Promise.all([getNasDatasetStats(), getLearningExecutionStats()])
+      .then(([nasStats, tmsStats]) => {
+        setStats({ nas: nasStats, tms: tmsStats })
       })
       .finally(() => setLoading(false))
   }, [])
