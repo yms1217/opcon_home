@@ -2,6 +2,7 @@ import axios from 'axios'
 import { API_CONFIG, ENDPOINTS } from './constants'
 import { useUserStore } from '../../stores/src/useUserStore'
 import { generateUuid36, getTimestampSec } from '@repo/utils'
+import i18next from 'i18next'
 
 /* ===============================
  * Refresh 상태 관리
@@ -19,10 +20,9 @@ const onRefreshed = (newToken) => {
 }
 
 const forceLogout = () => {
-  console.error('forceLogout')
   const store = useUserStore.getState()
-  //store.logout()
-  //window.location.href = '/login?sessionout=Y'
+  store.logout()
+  window.location.href = '/login?sessionout=Y'
 }
 
 const axiosRefresh = axios.create({
@@ -36,6 +36,11 @@ const axiosRefresh = axios.create({
 const refreshAccessToken = async () => {
   const store = useUserStore.getState()
   const { userId, refreshToken } = store.session || {}
+
+  if (!refreshToken) {
+    forceLogout()
+    return
+  }
 
   const response = await axiosRefresh.post(
     ENDPOINTS.AUTH.TOKEN_REFRESH,
@@ -72,14 +77,26 @@ const createClient = (baseURL, options = {}) => {
    * =============================== */
   instance.interceptors.request.use(
     (config) => {
-      const { accessToken } = useUserStore.getState().session || {}
+      const { accessToken, userId, userRole } = useUserStore.getState().session || {}
 
       if (accessToken) {
         config.headers.authorization = `Bearer ${accessToken}`
       }
 
+      // if (import.meta.env.VITE_IS_HEADER_INCLUDE_USERID && import.meta.env.VITE_IS_HEADER_INCLUDE_USERID == 'Y') {
+      //   if (userId) {
+      //     config.headers['x-user-id'] = userId
+      //   }
+      //   if (userRole) {
+      //     config.headers['x-user-role'] = userRole
+      //   }
+      // }
+
       config.headers.timestamp = getTimestampSec()
       config.headers['message-id'] = generateUuid36()
+
+      const i18n = i18next.default || i18next
+      config.headers['language-code'] = i18n.language
 
       return config
     },
@@ -100,7 +117,6 @@ const createClient = (baseURL, options = {}) => {
       }
 
       const { status, data } = response
-      const errorCode = data?.errorCode
 
       // refresh API 자신이면 바로 로그아웃
       if (config.url?.includes('/auth/refresh')) {
@@ -109,50 +125,56 @@ const createClient = (baseURL, options = {}) => {
         return Promise.reject(error)
       }
 
+      console.error('instance.interceptors.response.use message=' + data?.message)
+
       // accessToken 만료만 처리
-      if (status === 401 && errorCode === 'GW_401') {
-        // 이미 retry한 요청이면 다시 refresh 시도 ❌
-        if (config._retry) {
-          //forceLogout()
-          console.error('config._retry')
+      if (status === 401 && data?.message?.toUpperCase?.() === 'UNAUTHORIZED') {
+        // 401 && UNAUTHORIZED 케이스에서 refreshtoken을 통해서 로그인을 연장하는 부분
+        // VITE_AUTO_REFRESH_TOKEN=Y 인 경우 세션 자동연장
+        if (import.meta.env.VITE_AUTO_REFRESH_TOKEN && import.meta.env.VITE_AUTO_REFRESH_TOKEN == 'Y') {
+          console.error('VITE_AUTO_REFRESH_TOKEN == Y')
+          // 이미 retry한 요청이면 다시 refresh 시도 ❌
+          if (config._retry) {
+            //forceLogout()
+            console.error('config._retry')
+            return Promise.reject(error)
+          }
+          config._retry = true
+          if (isRefreshing) {
+            return new Promise((resolve) => {
+              subscribeTokenRefresh((newToken) => {
+                config.headers.authorization = `Bearer ${newToken}`
+                resolve(instance(config))
+              })
+            })
+          }
+          isRefreshing = true
+          try {
+            const { accessToken: newAccessToken, refreshToken: newRefreshToken } = await refreshAccessToken()
+            const store = useUserStore.getState()
+            // store에 다시 저장 (persist → sessionStorage 자동 반영)
+            store.updateTokens({
+              accessToken: newAccessToken,
+              refreshToken: newRefreshToken
+            })
+            instance.defaults.headers.authorization = `Bearer ${newAccessToken}`
+            config.headers.authorization = `Bearer ${newAccessToken}`
+            onRefreshed(newAccessToken)
+            return instance(config)
+          } catch (e) {
+            forceLogout()
+            return Promise.reject(e)
+          } finally {
+            isRefreshing = false
+          }
+        } else {
+          // 무조건 로그아웃하도록 처리
+          forceLogout()
           return Promise.reject(error)
         }
-
-        config._retry = true
-
-        if (isRefreshing) {
-          return new Promise((resolve) => {
-            subscribeTokenRefresh((newToken) => {
-              config.headers.authorization = `Bearer ${newToken}`
-              resolve(instance(config))
-            })
-          })
-        }
-
-        isRefreshing = true
-
-        try {
-          const { accessToken: newAccessToken, refreshToken: newRefreshToken } = await refreshAccessToken()
-
-          const store = useUserStore.getState()
-          // store에 다시 저장 (persist → sessionStorage 자동 반영)
-          store.updateTokens({
-            accessToken: newAccessToken,
-            refreshToken: newRefreshToken
-          })
-
-          instance.defaults.headers.authorization = `Bearer ${newAccessToken}`
-          config.headers.authorization = `Bearer ${newAccessToken}`
-
-          onRefreshed(newAccessToken)
-
-          return instance(config)
-        } catch (e) {
-          forceLogout()
-          return Promise.reject(e)
-        } finally {
-          isRefreshing = false
-        }
+      } else if (status === 401) {
+        forceLogout()
+        return Promise.reject(error)
       }
 
       // 나머지 에러는 그대로 전달

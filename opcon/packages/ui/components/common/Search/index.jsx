@@ -1,12 +1,15 @@
-import { StyledSearch } from './styles'
+import { StyledSearch, StyledSearchWrapper } from './styles'
 import Icon from '../Icon'
 import useInput from '@repo/hooks/useInput'
 
 const Search = ({
+  label,
   size = 'sm',
   theme = 'outline',
   placeholder = '검색어 입력',
   isLoading = false,
+  width,
+  minWidth,
   onChange,
   onFocus,
   onBlur,
@@ -34,13 +37,15 @@ const Search = ({
     }
   }
 
-  return (
+  const searchContent = (
     <StyledSearch
       className={`typographyBody${size === 'xs' ? 6 : size === 'sm' ? 5 : 4}`}
       $size={size}
       $theme={theme}
       $focused={isFocused}
       $disabled={rest.disabled}
+      $width={width}
+      $minWidth={minWidth}
     >
       <button className="searchButton" type="submit" onClick={rest.onClick} aria-label="Search">
         <Icon name="search" size={size === 'xs' ? 16 : size === 'sm' ? 20 : 24} />
@@ -71,6 +76,15 @@ const Search = ({
         )
       )}
     </StyledSearch>
+  )
+
+  return label ? (
+    <StyledSearchWrapper $width={width} $minWidth={minWidth}>
+      <span className="label typographyBody6">{label}</span>
+      {searchContent}
+    </StyledSearchWrapper>
+  ) : (
+    searchContent
   )
 }
 

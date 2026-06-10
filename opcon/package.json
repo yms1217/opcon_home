@@ -2,11 +2,17 @@
   "name": "opcon",
   "private": true,
   "scripts": {
-    "build": "turbo run build",
-    "build:dev": "turbo run build:dev",
-    "build:qa": "turbo run build:qa",
+    "build": "turbo run build --filter=!ebme --filter=!setup",
+    "build:dev": "turbo run build:dev --filter=!ebme --filter=!setup",
+    "build:qa": "turbo run build:qa --filter=!ebme --filter=!setup",
+    "build:ebme": "turbo run build --filter=ebme",
+    "build:setup": "turbo run build --filter=setup",
     "dev": "turbo run dev",
-    "preview": "turbo run preview --parallel",
+    "dev:ebme": "turbo run dev --filter=ebme",
+    "dev:setup": "turbo run dev --filter=setup",
+    "preview": "turbo run preview --parallel --filter=!ebme --filter=!setup",
+    "preview:ebme": "turbo run preview --parallel --filter=ebme",
+    "preview:setup": "turbo run preview --parallel --filter=setup",
     "lint": "turbo run lint",
     "format": "turbo run format",
     "check-types": "turbo run check-types",
@@ -14,7 +20,7 @@
   },
   "devDependencies": {
     "prettier": "^3.7.4",
-    "turbo": "^2.9.12"
+    "turbo": "^2.8.1"
   },
   "packageManager": "pnpm@10.30.3",
   "engines": {

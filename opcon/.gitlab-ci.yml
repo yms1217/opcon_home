@@ -44,14 +44,14 @@ workflow:
 
 variables:
   DOCKER_DRIVER: overlay2
-  DOCKER_API_VERSION: "1.43"
-  DOCKER_BUILDKIT: "1"
-  DEV_HTTP_PORT: "8081"
-  DEV_HOST_IP: "10.158.2.175"
+  DOCKER_API_VERSION: '1.43'
+  DOCKER_BUILDKIT: '1'
+  DEV_HTTP_PORT: '8081'
+  DEV_HOST_IP: '10.158.2.175'
   # 디버그 모드 (개발/문제해결 시에만 true로 설정)
   # DEBUG_MODE: "false"
   # 진단 모드 (Runner 상태 확인용, 별도 제어)
-  RUN_DIAG: "false"
+  RUN_DIAG: 'false'
   # STS AssumeRole 설정
   DEPLOYMENT_ROLE_ARN: arn:aws:iam::398838060384:role/gitlab-ci-deployment-role
   EXTERNAL_ID: hcrsp-gitlab-deployment-2026
@@ -188,7 +188,7 @@ check_runner:
       echo "🏃 Runner: $CI_RUNNER_DESCRIPTION"
       echo "🐳 Docker: $(docker --version)"
       echo "☁️ AWS CLI: $(aws --version)"
-      
+
       if [ "$DEPLOY_ENVIRONMENT" != "dev" ]; then
         assume_aws_role && echo "✅ AssumeRole 테스트 성공" || echo "❌ AssumeRole 테스트 실패"
       fi
@@ -239,7 +239,7 @@ test_assume_role:
       echo "DEPLOYMENT_ROLE_ARN: $DEPLOYMENT_ROLE_ARN"
       echo "EXTERNAL_ID: ${EXTERNAL_ID:0:10}..."
       echo ""
-      
+
       if assume_aws_role; then
         echo "✅ AssumeRole 성공"
         echo "🔍 현재 권한:"
@@ -262,7 +262,7 @@ build_image:
   script:
     - |
       set -e
-      
+
       # build.env 초기화 (내용 숨김)
       : > build.env
       echo "DOTENV_INITIALIZED=true" >> build.env
@@ -302,21 +302,21 @@ build_image:
       fi
 
       echo "🏗️ $DEPLOY_ENVIRONMENT 이미지 빌드 및 ECR 푸시..."
-      
+
       # DEBUG: ECR 정보 표시 (개발 시에만)
       # if [ "${DEBUG_MODE:-false}" = "true" ]; then
       #   echo "🔍 ECR Repository: $ECR_REPOSITORY_URI"
       #   echo "🔍 Docker Tag: $DOCKER_TAG"
       # fi
-      
+
       # ECR 로그인 (출력 숨김)
       aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com" >/dev/null 2>&1
-      
+
       # 이미지 빌드 및 푸시 (출력 숨김)
       docker build --build-arg DEPLOY_ENV="$DOCKERFILE_DEPLOY_ENV" -t "$ECR_REPOSITORY_URI:$DOCKER_TAG" -t "$ECR_REPOSITORY_URI:latest" . >/dev/null 2>&1
       docker push "$ECR_REPOSITORY_URI:$DOCKER_TAG" >/dev/null 2>&1
       docker push "$ECR_REPOSITORY_URI:latest" >/dev/null 2>&1
-      
+
       # 정리 (출력 숨김)
       docker rmi -f "$ECR_REPOSITORY_URI:$DOCKER_TAG" "$ECR_REPOSITORY_URI:latest" >/dev/null 2>&1 || true
       docker image prune -f >/dev/null 2>&1 || true
@@ -337,13 +337,13 @@ build_image:
         echo "SERVICE_URL=$SERVICE_URL"
         echo "BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       } >> build.env
-      
+
       # DEBUG: build.env 내용 표시 (개발 시에만)
       # if [ "${DEBUG_MODE:-false}" = "true" ]; then
       #   echo "📋 Build Environment Variables:"
       #   cat build.env
       # fi
-      
+
       echo "✅ $DEPLOY_ENVIRONMENT 빌드 및 푸시 완료"
   artifacts:
     reports:
@@ -366,19 +366,21 @@ run_on_runner_dev:
     - |
       set -e
       echo "🚀 DEV 컨테이너 배포..."
-      
+
       # DEBUG: 컨테이너 정보 표시 (개발 시에만)
       # if [ "${DEBUG_MODE:-false}" = "true" ]; then
       #   echo "🔍 Container Name: $LOCAL_CONTAINER_NAME"
       #   echo "🔍 Image Name: $LOCAL_IMAGE_NAME"
       #   echo "🔍 Port Mapping: ${DEV_HTTP_PORT}:80"
       # fi
-      
+
       # 기존 컨테이너 정리 (출력 숨김)
       if docker ps -a --format '{{.Names}}' | grep -qx "$LOCAL_CONTAINER_NAME"; then
+        echo "Container ${LOCAL_CONTAINER_NAME} is running... Removing it..."
         docker rm -f "$LOCAL_CONTAINER_NAME" >/dev/null 2>&1 || true
+        sleep 3
       fi
-      
+
       # 1) 이미지 존재 여부를 먼저 확인 (없으면 여기서 즉시 원인 출력)
       docker image inspect "$LOCAL_IMAGE_NAME" >/dev/null 2>&1 || {
         echo "❌ Image not found locally: $LOCAL_IMAGE_NAME"
@@ -393,7 +395,7 @@ run_on_runner_dev:
 
       # 3) docker run 실패 시 stderr를 로그에 출력
       rm -f docker_run.err
-      docker run -d \
+      docker run -d --rm \
         --name "$LOCAL_CONTAINER_NAME" \
         -p "${DEV_HTTP_PORT}:80" \
         -e NODE_ENV=development \
@@ -410,14 +412,14 @@ run_on_runner_dev:
 
       # 4) 컨테이너가 실제로 떠 있는지 확인
       docker ps --filter "name=$LOCAL_CONTAINER_NAME" --no-trunc
-      
+
       # 이전 이미지 정리 (출력 숨김)
       OLD_DEV_IMAGES=$(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E '^'"${CI_PROJECT_NAME}"':dev-' | grep -v -F "$LOCAL_IMAGE_NAME" || true)
       if [ -n "$OLD_DEV_IMAGES" ]; then
         echo "$OLD_DEV_IMAGES" | xargs -r docker rmi -f >/dev/null 2>&1 || true
       fi
       docker image prune -f >/dev/null 2>&1 || true
-      
+
       echo "✅ DEV 배포 완료: $SERVICE_URL"
 
 deploy_to_ecs:
@@ -465,7 +467,7 @@ deploy_to_ecs:
 
       # 현재 태스크 정의 가져오기 (출력 숨김)
       CURRENT_TASK_DEF_JSON=$(aws ecs describe-task-definition --task-definition "$TASK_DEFINITION_NAME" --region "$AWS_DEFAULT_REGION" 2>/dev/null)
-      
+
       # 새 태스크 정의 생성 (출력 숨김)
       NEW_TASK_DEF_JSON=$(echo "$CURRENT_TASK_DEF_JSON" | jq --arg IMAGE "$ECR_IMAGE_URI" --arg ENV "$ENVIRONMENT" --arg NODE_ENV "$NODE_ENV" '
         .taskDefinition
@@ -478,9 +480,9 @@ deploy_to_ecs:
           ]
         | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)
       ')
-      
+
       CURRENT_IMAGE=$(echo "$CURRENT_TASK_DEF_JSON" | jq -r '.taskDefinition.containerDefinitions[0].image')
-      
+
       if [ "$CURRENT_IMAGE" = "$ECR_IMAGE_URI" ]; then
         echo "🔄 이미지 동일 - 기존 태스크 정의 재사용"
         NEW_TASK_DEF_ARN=$(echo "$CURRENT_TASK_DEF_JSON" | jq -r '.taskDefinition.taskDefinitionArn')
@@ -488,18 +490,18 @@ deploy_to_ecs:
         echo "📝 새 태스크 정의 등록..."
         NEW_TASK_DEF_ARN=$(aws ecs register-task-definition --region "$AWS_DEFAULT_REGION" --cli-input-json "$NEW_TASK_DEF_JSON" --query 'taskDefinition.taskDefinitionArn' --output text 2>/dev/null)
       fi
-      
+
       # ECS 서비스 업데이트 (출력 숨김)
       aws ecs update-service --cluster "$ECS_CLUSTER_NAME" --service "$ECS_SERVICE_NAME" --task-definition "$NEW_TASK_DEF_ARN" --region "$AWS_DEFAULT_REGION" >/dev/null 2>&1
-      
+
       # build.env 업데이트 (내용 숨김)
       echo "NEW_TASK_DEF_ARN=$NEW_TASK_DEF_ARN" >> build.env
-      
+
       # DEBUG: 태스크 정의 ARN 표시 (개발 시에만)
       # if [ "${DEBUG_MODE:-false}" = "true" ]; then
       #   echo "📋 New Task Definition ARN: $NEW_TASK_DEF_ARN"
       # fi
-      
+
       echo "✅ $DEPLOY_ENVIRONMENT ECS 배포 완료"
   artifacts:
     reports:
@@ -522,7 +524,7 @@ verify_dev:
       set -e
       echo "🔍 DEV 헬스체크..."
       sleep 5
-      
+
       if curl -f --max-time 10 "http://${DEV_HOST_IP}:${DEV_HTTP_PORT}/health" >/dev/null 2>&1; then
         echo "✅ DEV 헬스체크 성공"
       else
@@ -559,7 +561,7 @@ verify_ecs:
 
       echo "⏳ 서비스 안정화 대기 (60초)..."
       sleep 60
-      
+
       # 헬스체크 (최대 10회 재시도)
       for i in $(seq 1 10); do
         if curl -f --max-time 10 "$SERVICE_URL/health" >/dev/null 2>&1; then

@@ -21,11 +21,11 @@ export default defineConfig(({ mode }) => {
       federation({
         name: 'main',
         remotes: {
-//          tms: isProd ? '/tms/assets/remoteEntry.js' : '/tms/remoteEntry.js',
-//          ota: isProd ? '/ota/assets/remoteEntry.js' : '/ota/remoteEntry.js',
+          tms: isProd ? '/tms/assets/remoteEntry.js' : '/tms/remoteEntry.js',
+          ota: isProd ? '/ota/assets/remoteEntry.js' : '/ota/remoteEntry.js',
           robot: isProd ? '/robot/assets/remoteEntry.js' : '/robot/remoteEntry.js',
-          learn: isProd ? '/learning/assets/remoteEntry.js' : '/learning/remoteEntry.js',
-//          cms: isProd ? '/cms/assets/remoteEntry.js' : '/cms/remoteEntry.js'
+          cms: isProd ? '/cms/assets/remoteEntry.js' : '/cms/remoteEntry.js',
+          learn: isProd ? '/learning/assets/remoteEntry.js' : '/learning/remoteEntry.js'
         },
         shared: {
           react: { singleton: true, eager: true },
@@ -42,95 +42,95 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5173,
       proxy: {
-        // '/tms': {
-        //   target: 'http://localhost:5179',
-        //   changeOrigin: true,
-        //   ws: true,
-        //   rewrite: (path) => (path === '/tms' ? '/tms/' : path)
-        // },
-        // '/ota': {
-        //   target: 'http://localhost:5174',
-        //   changeOrigin: true,
-        //   ws: true,
-        //   rewrite: (path) => (path === '/ota' ? '/ota/' : path)
-        // },
+        '/tms': {
+          target: 'http://localhost:5179',
+          changeOrigin: true,
+          ws: true,
+          rewrite: (path) => (path === '/tms' ? '/tms/' : path)
+        },
+        '/ota': {
+          target: 'http://localhost:5174',
+          changeOrigin: true,
+          ws: true,
+          rewrite: (path) => (path === '/ota' ? '/ota/' : path)
+        },
         '/robot': {
           target: 'http://localhost:5175',
           changeOrigin: true,
           ws: true,
           rewrite: (path) => (path === '/robot' ? '/robot/' : path)
         },
-        '/learning': {
+        '/ebme': {
           target: 'http://localhost:5176',
           changeOrigin: true,
           ws: true,
-          rewrite: (path) => (path === '/learning' ? '/learning/' : path)
+          rewrite: (path) => (path === '/ebme' ? '/ebme/' : path)
         },
-        // '/ebme': {
-        //   target: 'http://localhost:5176',
-        //   changeOrigin: true,
-        //   ws: true,
-        //   rewrite: (path) => (path === '/ebme' ? '/ebme/' : path)
-        // },
-        // '/setup': {
-        //   target: 'http://localhost:5177',
-        //   changeOrigin: true,
-        //   ws: true,
-        //   rewrite: (path) => (path === '/setup' ? '/setup/' : path)
-        // },
-        // '/cms': {
-        //   target: 'http://localhost:5178',
-        //   changeOrigin: true,
-        //   ws: true,
-        //   rewrite: (path) => (path === '/cms' ? '/cms/' : path)
-        // }
+        '/setup': {
+          target: 'http://localhost:5177',
+          changeOrigin: true,
+          ws: true,
+          rewrite: (path) => (path === '/setup' ? '/setup/' : path)
+        },
+        '/cms': {
+          target: 'http://localhost:5178',
+          changeOrigin: true,
+          ws: true,
+          rewrite: (path) => (path === '/cms' ? '/cms/' : path)
+        },
+        '/learning': {
+          target: 'http://localhost:5180',
+          changeOrigin: true,
+          ws: true,
+          rewrite: (path) => (path === '/learning' ? '/learning/' : path)
+        },       
       }
     },
     preview: {
       port: 4173,
       proxy: {
-        // '/tms': {
-        //   target: 'http://localhost:4179',
-        //   changeOrigin: true,
-        //   ws: true,
-        //   rewrite: (path) => (path === '/tms' ? '/tms/' : path)
-        // },
-        // '/ota': {
-        //   target: 'http://localhost:4174',
-        //   changeOrigin: true,
-        //   ws: true,
-        //   rewrite: (path) => (path === '/ota' ? '/ota/' : path)
-        // },
+        '/tms': {
+          target: 'http://localhost:4179',
+          changeOrigin: true,
+          ws: true,
+          rewrite: (path) => (path === '/tms' ? '/tms/' : path)
+        },
+        '/ota': {
+          target: 'http://localhost:4174',
+          changeOrigin: true,
+          ws: true,
+          rewrite: (path) => (path === '/ota' ? '/ota/' : path)
+        },
         '/robot': {
           target: 'http://localhost:4175',
           changeOrigin: true,
           ws: true,
           rewrite: (path) => (path === '/robot' ? '/robot/' : path)
         },
-        '/learning': {
+        '/ebme': {
           target: 'http://localhost:4176',
           changeOrigin: true,
           ws: true,
-          rewrite: (path) => (path === '/learning' ? '/learning/' : path)
+          rewrite: (path) => (path === '/ebme' ? '/ebme/' : path)
         },
-        // '/ebme': {
-        //   target: 'http://localhost:4176',
-        //   changeOrigin: true,
-        //   ws: true,
-        //   rewrite: (path) => (path === '/ebme' ? '/ebme/' : path)
-        // },
-        // '/setup': {
-        //   target: 'http://localhost:4177',
-        //   changeOrigin: true,
-        //   ws: true,
-        //   rewrite: (path) => (path === '/setup' ? '/setup/' : path)
-        // },
-        // '/cms': {
-        //   target: 'http://localhost:4178',
-        //   changeOrigin: true,
-        //   ws: true,
-        //   rewrite: (path) => (path === '/cms' ? '/cms/' : path)
-        // }
+        '/setup': {
+          target: 'http://localhost:4177',
+          changeOrigin: true,
+          ws: true,
+          rewrite: (path) => (path === '/setup' ? '/setup/' : path)
+        },
+        '/cms': {
+          target: 'http://localhost:4178',
+          changeOrigin: true,
+          ws: true,
+          rewrite: (path) => (path === '/cms' ? '/cms/' : path)
+        },
+        '/learning': {
+          target: 'http://localhost:4180',
+          changeOrigin: true,
+          ws: true,
+          rewrite: (path) => (path === '/learning' ? '/learning/' : path)
+        }
       }
     },
     build: {

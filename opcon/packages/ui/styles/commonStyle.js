@@ -272,3 +272,120 @@ export const SearchContainer = styled.div`
     }
   }
 `
+
+export const VersionContainer = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+
+  .close-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.8rem;
+    height: 1.8rem;
+    margin-left: 1rem;
+    border-radius: 50%;
+    font-weight: bold;
+    font-size: 1rem;
+    color: var(--color-neutral-60);
+    transition: all 0.2s;
+    cursor: pointer;
+
+    &:hover {
+      background-color: var(--color-neutral-30);
+      color: var(--color-neutral-90);
+    }
+  }
+
+  .version-label {
+    font-size: var(--font-size-body-6);
+    line-height: var(--line-height-body-6);
+    color: var(--color-neutral-70);
+  }
+
+  .version-input-group {
+    display: flex;
+    align-items: center;
+    flex-wrap: nowrap;
+    background: var(--color-neutral-10);
+    border: 1px solid var(--color-secondary-20);
+    border-radius: var(--radius-md);
+    min-height: 4.8rem;
+    padding: 0.4rem 1.6rem;
+    transition: all 0.2s;
+    gap: 0.8rem;
+
+    &:focus-within {
+      outline: 2px solid var(--color-secondary-80);
+      outline-offset: -2px;
+    }
+
+    &:hover:not(:focus-within) {
+      background: var(--color-secondary-10);
+    }
+
+    &.disabled {
+      opacity: 0.4;
+      pointer-events: none;
+    }
+
+    & > div,
+    & > button {
+      flex-shrink: 0;
+    }
+
+    & > div {
+      margin-left: 0 !important;
+      display: flex;
+      align-items: center;
+
+      /* Neutralize internal Input component styles */
+      & > div {
+        border: 0 !important;
+        outline: 0 !important;
+        background: transparent !important;
+        padding: 0 !important;
+        height: auto !important;
+        gap: 0 !important;
+      }
+    }
+
+    input {
+      width: auto !important;
+      min-width: 12rem;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      text-align: left;
+      font-size: var(--font-size-body-4);
+      color: var(--color-neutral-80);
+      padding: 0;
+
+      &::-webkit-inner-spin-button,
+      &::-webkit-outer-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+      }
+      -moz-appearance: textfield;
+
+      &:focus {
+        color: var(--color-secondary-90);
+        font-weight: 600;
+      }
+    }
+  }
+
+  .version-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 1.2rem;
+
+    .version-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.8rem;
+      align-items: center;
+    }
+  }
+`

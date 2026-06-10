@@ -32,10 +32,10 @@ const HeaderControls = React.memo(HeaderControlsOrig, (prev, next) => {
   return shallowEqualKeys(prev, next, [
     'robotName',
     'deviceId',
+    'headerLocked',
     'showSettings',
     'settings',
     'selectedDate',
-    'isLoadingLogs',
     'selectedLogId',
     'isEmptyOption',
     'isPreparingDownload',
@@ -95,185 +95,211 @@ const HeaderContainer = React.memo(
 )
 
 // BodyContainer는 본문 상태 변화에만 반응
-const BodyContainer = React.memo(function BodyContainerInner(props) {
-  const {
-    // 스타일/레이아웃
-    topRatio,
+const BodyContainer = React.memo(
+  function BodyContainerInner(props) {
+    const {
+      // 스타일/레이아웃
+      topRatio,
 
-    // 맵/플레이어 공통
-    canvasRef,
-    threeMountRef,
-    currentTimestampMs,
-    durationMs,
-    formattedCurrentTime,
-    formattedDuration,
-    isLoadingLogs,
-    canPlay,
-    loadPhase,
-    leftPlayable,
-    onCanvasMouseDown,
-    hoverVisible,
-    hoverMs,
-    hoverRatio,
-    hoverAbsLabel,
+      // 맵/플레이어 공통
+      canvasRef,
+      threeMountRef,
+      currentTimestampMs,
+      durationMs,
+      formattedCurrentTime,
+      formattedDuration,
+      isLoadingLogs,
+      canPlay,
+      loadPhase,
+      leftPlayable,
+      onCanvasMouseDown,
+      hoverVisible,
+      hoverMs,
+      hoverRatio,
+      hoverAbsLabel,
 
-    // 공통 유틸
-    msToClock,
+      // 공통 유틸
+      msToClock,
 
-    // 커버리지/맵 데이터
-    mapGrid,
-    coveragePathPoints,
+      // 커버리지/맵 데이터
+      mapGrid,
+      coveragePathPoints,
 
-    gridData,
-    pathPoints,
-    lidarScans,
-    localCostmapFrames,
-    dwaGoals,
-    t0EpochMs,
+      gridData,
+      pathPoints,
+      lidarScans,
+      localCostmapFrames,
+      dwaGoals,
+      t0EpochMs,
 
-    // 토글
-    showSensor,
-    setShowSensor,
+      odomChart1,
+      odomChart2,
+      chartLoading,
+      // 토글
+      showSensor,
+      setShowSensor,
 
-    // 플레이어 바
-    progressBarRef,
-    onProgressMouseEnter,
-    onProgressMouseMove,
-    onProgressMouseLeave,
-    handleProgressPointerDown,
-    playRatio,
-    bufferRatio,
-    handlePrevFrame,
-    handleTogglePlay,
-    handleNextFrame,
-    playbackRate,
-    setPlaybackRate,
-    isPlaying,
+      // 플레이어 바
+      progressBarRef,
+      onProgressMouseEnter,
+      onProgressMouseMove,
+      onProgressMouseLeave,
+      handleProgressPointerDown,
+      playRatio,
+      bufferRatio,
+      handlePrevFrame,
+      handleTogglePlay,
+      handleNextFrame,
+      playbackRate,
+      setPlaybackRate,
+      isPlaying,
 
-    // 로그 영역
-    selectedLabel,
-    selectedDate,
-    logError,
-    logLines,
-    filteredLines,
-    displayLines,
-    detectLevel,
-    logContainerRef,
-    levelFilter,
-    toggleLevel,
-    pendingKeyword,
-    setPendingKeyword,
-    handleKeywordSearchClick,
-    appliedKeyword,
-    emptyLogMessage,
-    formatDate,
+      // 로그 영역
+      selectedLabel,
+      selectedDate,
+      logError,
+      logLines,
+      filteredLines,
+      displayLines,
+      detectLevel,
+      logContainerRef,
+      levelFilter,
+      toggleLevel,
+      pendingKeyword,
+      setPendingKeyword,
+      handleKeywordSearchClick,
+      appliedKeyword,
+      emptyLogMessage,
+      formatDate,
 
-    // 드래그 바
-    onDragStart
-  } = props
+      // 드래그 바
+      onDragStart
+    } = props
 
-  return (
-    <>
-      {/* 상단(맵) */}
-      <div style={{ ...S.topPane, height: `calc(${topRatio}% - 4px)` }}>
-        <MapPanels
-          // 캔버스/3D
-          canvasRef={canvasRef}
-          threeMountRef={threeMountRef}
-          // 시간 표시
-          currentTimestampMs={currentTimestampMs}
-          durationMs={durationMs}
-          formattedCurrentTime={formattedCurrentTime}
-          formattedDuration={formattedDuration}
-          // 상태
+    return (
+      <>
+        {/* 상단(맵) */}
+        <div style={{ ...S.topPane, height: `calc(${topRatio}% - 4px)` }}>
+          <MapPanels
+            // 캔버스/3D
+            canvasRef={canvasRef}
+            threeMountRef={threeMountRef}
+            // 시간 표시
+            currentTimestampMs={currentTimestampMs}
+            durationMs={durationMs}
+            formattedCurrentTime={formattedCurrentTime}
+            formattedDuration={formattedDuration}
+            // 상태
+            isLoadingLogs={isLoadingLogs}
+            canPlay={canPlay}
+            loadPhase={loadPhase}
+            leftPlayable={leftPlayable}
+            // 인터랙션
+            onCanvasMouseDown={onCanvasMouseDown}
+            // onCanvasWheel={onCanvasWheel} // non-passive로 addEventListener 등록했다면 주석 유지
+            msToClock={msToClock}
+            // 이동면적(오른쪽 패널)
+            coverageGrid={mapGrid}
+            coveragePathPoints={coveragePathPoints}
+            gridData={gridData}
+            pathPoints={pathPoints}
+            lidarScans={lidarScans}
+            localCostmapFrames={localCostmapFrames}
+            dwaGoals={dwaGoals}
+            t0EpochMs={t0EpochMs}
+            // 신규 추가
+            showSensor={showSensor}
+            setShowSensor={setShowSensor}
+            odomChart1={odomChart1}
+            odomChart2={odomChart2}
+            chartLoading={chartLoading}
+          />
+
+          {/* 공통 플레이어 바 (두 맵 하단 전체 폭) */}
+          <PlayerBar
+            // 게이팅
+            canPlay={canPlay}
+            isPlaying={isPlaying}
+            // 프레임 스텝/토글
+            handlePrevFrame={handlePrevFrame}
+            handleTogglePlay={handleTogglePlay}
+            handleNextFrame={handleNextFrame}
+            // 진행바
+            progressBarRef={progressBarRef}
+            handleProgressPointerDown={handleProgressPointerDown}
+            onProgressMouseEnter={onProgressMouseEnter}
+            onProgressMouseMove={onProgressMouseMove}
+            onProgressMouseLeave={onProgressMouseLeave}
+            playRatio={playRatio}
+            bufferRatio={bufferRatio}
+            // 시간 라벨
+            currentTimestampMs={currentTimestampMs}
+            durationMs={durationMs}
+            formattedCurrentTime={formattedCurrentTime}
+            formattedDuration={formattedDuration}
+            msToClock={msToClock}
+            // 배속 UX 연결
+            playbackRate={playbackRate}
+            onChangePlaybackRate={setPlaybackRate}
+            // 스텝 가능 여부는 경로 준비 기준
+            canStep={leftPlayable}
+            hoverVisible={hoverVisible}
+            hoverMs={hoverMs}
+            hoverRatio={hoverRatio}
+            hoverAbsLabel={hoverAbsLabel}
+          />
+        </div>
+
+        {/* 드래그 바 */}
+        <div style={S.dragBar} onMouseDown={onDragStart} title="위/아래 영역 높이를 드래그로 조절" />
+
+        {/* 하단(로그 영역) */}
+        <LogsSection
+          selectedLabel={selectedLabel}
+          selectedDate={selectedDate}
+          // 로그 데이터
           isLoadingLogs={isLoadingLogs}
-          canPlay={canPlay}
+          logError={logError}
+          logLines={logLines}
+          filteredLines={filteredLines}
+          detectLevel={detectLevel}
+          logContainerRef={logContainerRef}
+          // 필터
+          levelFilter={levelFilter}
+          toggleLevel={toggleLevel}
+          pendingKeyword={pendingKeyword}
+          setPendingKeyword={setPendingKeyword}
+          handleKeywordSearchClick={handleKeywordSearchClick}
+          appliedKeyword={appliedKeyword}
+          emptyLogMessage={emptyLogMessage}
           loadPhase={loadPhase}
-          leftPlayable={leftPlayable}
-          // 인터랙션
-          onCanvasMouseDown={onCanvasMouseDown}
-          // onCanvasWheel={onCanvasWheel} // non-passive로 addEventListener 등록했다면 주석 유지
-          msToClock={msToClock}
-          // 이동면적(오른쪽 패널)
-          coverageGrid={mapGrid}
-          coveragePathPoints={coveragePathPoints}
-          gridData={gridData}
-          pathPoints={pathPoints}
-          lidarScans={lidarScans}
-          localCostmapFrames={localCostmapFrames}
-          dwaGoals={dwaGoals}
-          t0EpochMs={t0EpochMs}
-          // 신규 추가
-          showSensor={showSensor}
-          setShowSensor={setShowSensor}
+          // 유틸
+          formatDate={formatDate}
         />
+      </>
+    )
+  },
+  (prev, next) => {
+    // ✅ loadPhase가 init 전환 시 → 1 frame defer 후 re-render
+    //    click handler 동기 blocking 방지
+    if (next.loadPhase === 'init' && prev.loadPhase !== 'init') {
+      // 다음 tick에서 강제 re-render 트리거
+      setTimeout(() => next._forceUpdate?.(), 0)
+      return true // 이번 render는 skip
+    }
 
-        {/* 공통 플레이어 바 (두 맵 하단 전체 폭) */}
-        <PlayerBar
-          // 게이팅
-          canPlay={canPlay}
-          isPlaying={isPlaying}
-          // 프레임 스텝/토글
-          handlePrevFrame={handlePrevFrame}
-          handleTogglePlay={handleTogglePlay}
-          handleNextFrame={handleNextFrame}
-          // 진행바
-          progressBarRef={progressBarRef}
-          handleProgressPointerDown={handleProgressPointerDown}
-          onProgressMouseEnter={onProgressMouseEnter}
-          onProgressMouseMove={onProgressMouseMove}
-          onProgressMouseLeave={onProgressMouseLeave}
-          playRatio={playRatio}
-          bufferRatio={bufferRatio}
-          // 시간 라벨
-          currentTimestampMs={currentTimestampMs}
-          durationMs={durationMs}
-          formattedCurrentTime={formattedCurrentTime}
-          formattedDuration={formattedDuration}
-          msToClock={msToClock}
-          // 배속 UX 연결
-          playbackRate={playbackRate}
-          onChangePlaybackRate={setPlaybackRate}
-          // 스텝 가능 여부는 경로 준비 기준
-          canStep={leftPlayable}
-          hoverVisible={hoverVisible}
-          hoverMs={hoverMs}
-          hoverRatio={hoverRatio}
-          hoverAbsLabel={hoverAbsLabel}
-        />
-      </div>
-
-      {/* 드래그 바 */}
-      <div style={S.dragBar} onMouseDown={onDragStart} title="위/아래 영역 높이를 드래그로 조절" />
-
-      {/* 하단(로그 영역) */}
-      <LogsSection
-        selectedLabel={selectedLabel}
-        selectedDate={selectedDate}
-        // 로그 데이터
-        isLoadingLogs={isLoadingLogs}
-        logError={logError}
-        logLines={logLines}
-        filteredLines={filteredLines}
-        detectLevel={detectLevel}
-        logContainerRef={logContainerRef}
-        // 필터
-        levelFilter={levelFilter}
-        toggleLevel={toggleLevel}
-        pendingKeyword={pendingKeyword}
-        setPendingKeyword={setPendingKeyword}
-        handleKeywordSearchClick={handleKeywordSearchClick}
-        appliedKeyword={appliedKeyword}
-        emptyLogMessage={emptyLogMessage}
-        loadPhase={loadPhase}
-        // 유틸
-        formatDate={formatDate}
-      />
-    </>
-  )
-})
+    const keys = Object.keys(next)
+    for (let i = 0; i < keys.length; i++) {
+      if (prev[keys[i]] !== next[keys[i]]) return false
+    }
+    return true
+  }
+)
 
 export default function Logreplay({ robotName = '로봇 명', initialDate }) {
+  // ✅ BodyContainer deferred re-render용
+  const [bodyKey, setBodyKey] = useState(0)
+
   const [searchParams] = useSearchParams()
   const deviceId = searchParams.get('deviceId')
   const [deviceName, setDeviceName] = useState('')
@@ -361,6 +387,10 @@ export default function Logreplay({ robotName = '로봇 명', initialDate }) {
     dwaGoals,
     t0EpochMs,
 
+    odomChart1,
+    odomChart2,
+    chartLoading,
+
     // 배속 (훅에서 제공)
     playbackRate,
     setPlaybackRate,
@@ -407,6 +437,7 @@ export default function Logreplay({ robotName = '로봇 명', initialDate }) {
   }, [logOptions, selectedLogId])
 
   const isEmptyOption = selectedLogId === '__empty__'
+  const headerLocked = isPlaying || isLoadingLogs
 
   // ★ 센서 토글 상태 (MapPanels에 전달)
   const [showSensor, setShowSensor] = useState(false)
@@ -416,13 +447,13 @@ export default function Logreplay({ robotName = '로봇 명', initialDate }) {
     () => ({
       robotName: deviceName || robotName,
       deviceId,
+      headerLocked,
       showSettings,
       settings,
       openSettingsPopover,
       scheduleCloseSettingsPopover,
       selectedDate,
       onDateChange,
-      isLoadingLogs,
       handleFetchListClick,
       handleVisibleRangeChange,
       allowedDateKeys,
@@ -439,13 +470,13 @@ export default function Logreplay({ robotName = '로봇 명', initialDate }) {
     [
       deviceName,
       robotName,
+      headerLocked,
       showSettings,
       settings,
       openSettingsPopover,
       scheduleCloseSettingsPopover,
       selectedDate,
       onDateChange,
-      isLoadingLogs,
       handleFetchListClick,
       handleVisibleRangeChange,
       allowedDateKeys,
@@ -469,6 +500,8 @@ export default function Logreplay({ robotName = '로봇 명', initialDate }) {
       {/* 본문: 무거운 렌더는 여기로 격리 */}
       <div style={S.content}>
         <BodyContainer
+          key={bodyKey}
+          _forceUpdate={() => setBodyKey((k) => k + 1)}
           // 레이아웃
           topRatio={topRatio}
           // 맵/플레이어 공통
@@ -494,6 +527,9 @@ export default function Logreplay({ robotName = '로봇 명', initialDate }) {
           localCostmapFrames={localCostmapFrames}
           dwaGoals={dwaGoals}
           t0EpochMs={t0EpochMs}
+          odomChart1={odomChart1}
+          odomChart2={odomChart2}
+          chartLoading={chartLoading}
           // 토글
           showSensor={showSensor}
           setShowSensor={setShowSensor}

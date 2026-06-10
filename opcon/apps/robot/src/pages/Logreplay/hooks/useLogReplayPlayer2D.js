@@ -19,11 +19,12 @@ export default function useLogReplayPlayer2D({
   dwaGoals,
   renderOptions, //    { showPath, showVelocityVector, showObstacles, showSensorPoints }
   loadPhase,
-  t0EpochMs
+  t0EpochMs,
+  durationMs: timelineDurationMs // ✅ statistics 기반 dur
 }) {
   // 캔버스
   const canvasRef = useRef(null)
-
+  const timelineMs = Math.max(0, Number(timelineDurationMs) || 0)
   // refs 동기화 (렌더러는 ref를 본다)
   const pathPointsRef = useRef([])
   const plannedPathPointsRef = useRef([])
@@ -43,15 +44,32 @@ export default function useLogReplayPlayer2D({
     showGoalAndHeading: false
   })
 
-  // Header 옵션 변경 → ref 동기화
+  // ✅ renderOptions는 부모에서 매 렌더마다 새 객체가 될 수 있으므로,
+  //    "객체" 자체를 deps로 잡지 말고 primitive 필드만 추려서 동기화/리렌더 트리거를 만든다.
+  const optShowTrajectory = renderOptions?.showTrajectory
+  const optShowPlannedPath = renderOptions?.showPlannedPath
+  const optShowCostmap = renderOptions?.showCostmap
+  const optShowGoalAndHeading = renderOptions?.showGoalAndHeading
+
+  // Header 옵션 변경 → ref 동기화 (값 바뀔 때만)
   useEffect(() => {
-    if (renderOptions && typeof renderOptions === 'object') {
-      renderOptionsRef.current = {
-        ...renderOptionsRef.current,
-        ...renderOptions
-      }
+    const cur = renderOptionsRef.current
+    const next = {
+      showTrajectory: optShowTrajectory !== false,
+      showPlannedPath: optShowPlannedPath !== false,
+      showCostmap: optShowCostmap !== false,
+      showGoalAndHeading: optShowGoalAndHeading !== false
     }
-  }, [renderOptions])
+    // 값 동일하면 ref 갱신 불필요
+    if (
+      cur.showTrajectory === next.showTrajectory &&
+      cur.showPlannedPath === next.showPlannedPath &&
+      cur.showCostmap === next.showCostmap &&
+      cur.showGoalAndHeading === next.showGoalAndHeading
+    )
+      return
+    renderOptionsRef.current = { ...cur, ...next }
+  }, [optShowTrajectory, optShowPlannedPath, optShowCostmap, optShowGoalAndHeading])
 
   // ⚠️ 렌더러는 playTimeSecRef.current를 참조한다.
   // 상태만 0으로 리셋하면 첫 렌더 프레임에서 ref가 예전 값으로 남아
@@ -60,9 +78,6 @@ export default function useLogReplayPlayer2D({
     playTimeSecRef.current = Number(playTimeSec) || 0
   }, [playTimeSec])
 
-  useEffect(() => {
-    pathPointsRef.current = Array.isArray(pathPoints) ? pathPoints : []
-  }, [pathPoints])
   useEffect(() => {
     plannedPathPointsRef.current = Array.isArray(plannedPathPoints) ? plannedPathPoints : []
   }, [plannedPathPoints])
@@ -100,7 +115,11 @@ export default function useLogReplayPlayer2D({
     const base = { zoom: 1, panX: 0, panY: 0 }
     smoothRef.current = new SmoothViewController(base)
     viewRef.current = base
-    setView(base)
+    // ✅ 동일 값이면 state 업데이트 하지 않기(불필요 렌더 루프 방지)
+    setView((prev) => {
+      if (prev && prev.zoom === base.zoom && prev.panX === base.panX && prev.panY === base.panY) return prev
+      return base
+    })
   }, [])
 
   // 재생/시간
@@ -134,29 +153,46 @@ export default function useLogReplayPlayer2D({
   const bufferTargetRef = useRef(0)
 
   useEffect(() => {
+    console.log('[PLAYER BUFFER]', bufferRatio)
     bufferRatioRef.current = bufferRatio
   }, [bufferRatio])
+
+  const loadPhaseRef = useRef(loadPhase)
+  useEffect(() => {
+    loadPhaseRef.current = loadPhase
+  }, [loadPhase])
+
   useEffect(() => {
     let raf = 0
     const tick = () => {
+      if (loadPhaseRef.current !== 'ready') {
+        raf = requestAnimationFrame(tick)
+        return
+      }
+
       const cur = bufferRatioRef.current
       const dst = bufferTargetRef.current
-      // 목표가 1에 충분히 근접하면 부동소수/반올림 오차 없이 1로 고정
       const target = dst > 0.9995 ? 1 : dst
-      const next = cur + (target - cur) * 0.18
+      const next = target
       const snapped = Math.abs(target - next) < 0.002 ? target : next
+
       if (snapped !== cur) {
         bufferRatioRef.current = snapped
         setBufferRatio(snapped)
       }
+
       raf = requestAnimationFrame(tick)
     }
+
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
   }, [])
 
   const updateBuffer = useCallback((v) => {
-    const clamped = Math.max(0, Math.min(1, Number(v) || 0))
+    // ✅ 부호로 모드 구분: (+)fill, (-)spot
+    const num = Number(v) || 0
+    const clamped = Math.max(-1, Math.min(1, num))
+
     bufferTargetRef.current = clamped
   }, [])
 
@@ -165,7 +201,9 @@ export default function useLogReplayPlayer2D({
     if (loadPhase === 'ready') {
       bufferTargetRef.current = 1
       bufferRatioRef.current = 1
-      setBufferRatio(1)
+
+      // ✅ 이미 1이면 setState 생략
+      setBufferRatio((prev) => (prev === 1 ? prev : 1))
     }
   }, [loadPhase])
 
@@ -180,11 +218,25 @@ export default function useLogReplayPlayer2D({
       renderFnRef.current()
     })
   }, [])
-
+  useEffect(() => {
+    pathPointsRef.current = Array.isArray(pathPoints) ? pathPoints : []
+    // ✅ React 커밋 후 즉시 렌더 (초기 로드 시 로봇 표시 보장)
+    renderNow()
+  }, [pathPoints, renderNow])
   const t0EpochMsRef = useRef(null)
   useEffect(() => {
     t0EpochMsRef.current = t0EpochMs
   }, [t0EpochMs]) // ★ 상태와 ref 동기화
+
+  // ✅ statistics 기준 시간이 들어온 순간, 플레이헤드 절대시간 확정
+  useEffect(() => {
+    if (typeof t0EpochMs === 'number' && Number.isFinite(t0EpochMs) && t0EpochMs > 0) {
+      // playTimeSec = 0 → statStart 시각
+      playTimeSecRef.current = 0
+      setPlayTimeSec(0)
+    }
+  }, [t0EpochMs])
+
   const renderMap2D = useMemo(() => {
     const fn = createCanvasRenderer({
       canvasRef,
@@ -215,12 +267,17 @@ export default function useLogReplayPlayer2D({
   //표시 옵션 변경 시 즉시 반영(뷰 변경 없이도 redraw)
   useEffect(() => {
     renderNow()
-  }, [renderOptions, renderNow])
+  }, [optShowTrajectory, optShowPlannedPath, optShowCostmap, optShowGoalAndHeading, renderNow])
 
   // 부드러운 뷰 보간 루프(상호작용 중엔 step 억제)
   useEffect(() => {
     let raf = 0
     const tick = () => {
+      if (loadPhase !== 'ready') {
+        raf = requestAnimationFrame(tick)
+        return
+      }
+
       smoothRef.current.setTarget(viewRef.current)
       if (!interactingRef.current) {
         const changed = smoothRef.current.step(0.18)
@@ -356,23 +413,34 @@ export default function useLogReplayPlayer2D({
   }, [onCanvasWheel])
 
   // canPlay
-  const canPlay = useMemo(
-    () => loadPhase === 'ready' && Array.isArray(pathPoints) && pathPoints.length >= 2,
-    [loadPhase, pathPoints]
-  )
+
+  const canPlay = useMemo(() => {
+    if (loadPhase !== 'ready') return false
+    if (timelineMs > 0) return true
+    return Array.isArray(pathPoints) && pathPoints.length >= 2
+  }, [loadPhase, pathPoints, timelineMs])
+
   const leftPlayable = useMemo(() => Array.isArray(pathPoints) && pathPoints.length >= 2, [pathPoints])
   const controlsDisabled = !canPlay
 
   // 진행 비율
+
   const playRatio = useMemo(() => {
+    if (timelineMs > 0) {
+      const durSec = timelineMs / 1000
+      return durSec > 0 ? Math.max(0, Math.min(1, playTimeSec / durSec)) : 0
+    }
     const pts = Array.isArray(pathPoints) ? pathPoints : []
     if (pts.length < 2) return 0
     const dur = Math.max(0, (pts[pts.length - 1].tSec ?? 0) - (pts[0].tSec ?? 0))
     return dur > 0 ? Math.max(0, Math.min(1, playTimeSec / dur)) : 0
-  }, [pathPoints, playTimeSec])
+  }, [pathPoints, playTimeSec, timelineMs])
 
   // RAF 재생 루프
   const rafRef = useRef(0)
+
+  // ✅ UI state 커밋 스로틀(너무 잦은 setState로 depth exceeded 방지)
+  const lastUiCommitMsRef = useRef(0)
 
   // 외부에서 재생 관련 ref/state를 즉시 0으로 초기화하기 위한 헬퍼
   const resetPlaybackRefs = useCallback(() => {
@@ -380,6 +448,10 @@ export default function useLogReplayPlayer2D({
       cancelAnimationFrame(rafRef.current)
       rafRef.current = 0
     } catch {}
+
+    // ✅ 추가 (이게 핵심)
+    isPlayingRef.current = false
+
     // 재생 중지
     isPlayingRef.current = false
     setIsPlaying(false)
@@ -389,10 +461,12 @@ export default function useLogReplayPlayer2D({
     playIndexRef.current = 0
     setPlayIndex(0)
   }, [])
+
   useEffect(() => {
     cancelAnimationFrame(rafRef.current)
     if (!isPlaying) return
     let last = performance.now()
+    lastUiCommitMsRef.current = 0
     const loop = (now) => {
       if (isScrubbing) {
         last = now
@@ -403,9 +477,14 @@ export default function useLogReplayPlayer2D({
       last = now
 
       const pts = pathPointsRef.current
-      const ok = Array.isArray(pts) && pts.length >= 2
-      const durationSec = ok ? Math.max(0, pts[pts.length - 1].tSec - pts[0].tSec) : 0
-      if (!ok || durationSec <= 0) {
+      const durationSec =
+        timelineMs > 0
+          ? timelineMs / 1000 // ✅ statistics 기반
+          : Array.isArray(pts) && pts.length >= 2
+            ? Math.max(0, pts[pts.length - 1].tSec - pts[0].tSec)
+            : 0
+
+      if (durationSec <= 0) {
         setIsPlaying(false)
         return
       }
@@ -414,8 +493,9 @@ export default function useLogReplayPlayer2D({
       if (nextTime >= durationSec) {
         nextTime = durationSec
         playTimeSecRef.current = nextTime
-        setPlayTimeSec(nextTime)
         playIndexRef.current = 499
+        // ✅ 종료 시에는 반드시 최종 커밋
+        setPlayTimeSec(nextTime)
         setPlayIndex(499)
         setIsPlaying(false)
         renderNow()
@@ -423,30 +503,49 @@ export default function useLogReplayPlayer2D({
       }
 
       playTimeSecRef.current = nextTime
-      setPlayTimeSec(nextTime)
 
       const ratio = durationSec > 0 ? nextTime / durationSec : 0
       const idx = Math.max(0, Math.min(499, Math.round(ratio * 499)))
       playIndexRef.current = idx
-      setPlayIndex(idx)
+
+      // ✅ UI state는 너무 자주 업데이트하지 않음(예: 50ms=20Hz)
+      const since = now - (lastUiCommitMsRef.current || 0)
+      if (since >= 50) {
+        lastUiCommitMsRef.current = now
+        setPlayTimeSec(nextTime)
+        setPlayIndex(idx)
+      }
 
       renderNow()
       rafRef.current = requestAnimationFrame(loop)
     }
     rafRef.current = requestAnimationFrame(loop)
     return () => cancelAnimationFrame(rafRef.current)
-  }, [isPlaying, isScrubbing, renderNow])
+  }, [isPlaying, isScrubbing, renderNow, timelineMs])
 
   // 스크럽(플레이바 드래그) — 실시간 렌더 보장
   const progressBarRef = useRef(null)
   const setPlayHeadByRatio = useCallback(
     (r, { emitIndex = true } = {}) => {
-      const pts = pathPointsRef.current
-      if (!pts || pts.length < 2) return
-      const t0 = pts[0].tSec ?? 0
-      const t1 = pts[pts.length - 1].tSec ?? 0
-      const dur = Math.max(0, t1 - t0)
+      const dur =
+        Number.isFinite(durationMs) && durationMs > 0
+          ? durationMs / 1000
+          : (() => {
+              const pts = pathPointsRef.current
+              if (!pts || pts.length < 2) return 0
+              return pts[pts.length - 1].tSec - pts[0].tSec
+            })()
+
+      if (dur <= 0) return
+
       const nextTime = Math.max(0, Math.min(dur, r * dur))
+
+      console.log('[SEEK]', {
+        ratio: r,
+        nextTime,
+        timelineMs
+      })
+
       playTimeSecRef.current = nextTime
       setPlayTimeSec(nextTime)
       if (emitIndex) {
@@ -456,7 +555,7 @@ export default function useLogReplayPlayer2D({
       }
       renderNow() // ← 실시간 반영
     },
-    [renderNow]
+    [renderNow, timelineMs]
   )
 
   const handleProgressPointerDown = useCallback(
@@ -501,11 +600,13 @@ export default function useLogReplayPlayer2D({
   const _stepBySeconds = useCallback(
     (dir = +1) => {
       const pts = pathPointsRef.current || []
-      if (!Array.isArray(pts) || pts.length < 2) return
+      const dur =
+        timelineMs > 0
+          ? timelineMs / 1000
+          : Array.isArray(pts) && pts.length >= 2
+            ? Math.max(0, (Number(pts[pts.length - 1]?.tSec) || 0) - (Number(pts[0]?.tSec) || 0))
+            : 0
 
-      const t0 = Number(pts[0]?.tSec) || 0
-      const t1 = Number(pts[pts.length - 1]?.tSec) || 0
-      const dur = Math.max(0, t1 - t0)
       if (dur <= 0) return
 
       const rate = Math.max(0.01, Math.min(10, Number(playbackRateRef.current) || 1))
@@ -527,7 +628,7 @@ export default function useLogReplayPlayer2D({
 
       renderNow()
     },
-    [renderNow]
+    [renderNow, timelineMs]
   )
 
   // ▼ REPLACE: 이전 프레임(배속 반영)
@@ -548,8 +649,16 @@ export default function useLogReplayPlayer2D({
 
   const handleTogglePlay = useCallback(() => {
     const pts = pathPointsRef.current || []
-    const can = loadPhase === 'ready' && Array.isArray(pts) && pts.length >= 2
+    const durationSec =
+      timelineMs > 0
+        ? timelineMs / 1000
+        : Array.isArray(pts) && pts.length >= 2
+          ? Math.max(0, (Number(pts[pts.length - 1]?.tSec) || 0) - (Number(pts[0]?.tSec) || 0))
+          : 0
+
+    const can = loadPhase === 'ready' && durationSec > 0
     if (!can) return
+
     setIsPlaying((p) => {
       if (!p) {
         const atEnd = typeof playIndexRef.current === 'number' && playIndexRef.current >= 499 - 0.001
@@ -563,7 +672,7 @@ export default function useLogReplayPlayer2D({
       }
       return !p
     })
-  }, [renderNow, loadPhase])
+  }, [renderNow, loadPhase, timelineMs])
 
   // 시간 라벨
   const formatKST = useCallback((ms) => {
@@ -596,21 +705,37 @@ export default function useLogReplayPlayer2D({
 
   const { durationMs, currentTimestampMs, formattedCurrentTime, formattedDuration } = useMemo(() => {
     const pts = Array.isArray(pathPoints) ? pathPoints : []
+    const baseMs = Number(t0EpochMs) || 0
+
+    const resolvedDurationMs =
+      timelineMs > 0
+        ? timelineMs
+        : pts.length >= 2
+          ? Math.round(Math.max(0, pts[pts.length - 1].tSec - pts[0].tSec || 0) * 1000)
+          : 0
+
+    // ✅ statistics(timebase)가 있으면 pathPoints 없이도 시간 표시는 가능
     if (pts.length < 2) {
       return {
-        durationMs: 0,
-        currentTimestampMs: 0,
-        formattedCurrentTime: '0000-00-00 0:00:00.000 AM KST',
-        formattedDuration: '0000-00-00 0:00:00.000 AM KST'
+        durationMs: resolvedDurationMs,
+        currentTimestampMs: baseMs || 0,
+        formattedCurrentTime: baseMs ? formatKST(baseMs) : '0000-00-00 0:00:00.000 AM KST',
+        formattedDuration:
+          baseMs && resolvedDurationMs > 0
+            ? formatKST(baseMs + resolvedDurationMs)
+            : baseMs
+              ? formatKST(baseMs)
+              : '0000-00-00 ...'
       }
     }
-    const durationSec = Math.max(0, pts[pts.length - 1].tSec - pts[0].tSec || 0)
-    const durationMs = Math.round(durationSec * 1000)
-    const clampedTimeSec = Math.max(0, Math.min(durationSec, playTimeSec))
-    const currentTimestampMs = Math.round(clampedTimeSec * 1000)
 
-    const baseMs = Number(t0EpochMs) || 0
-    const absCurrentMs = baseMs + currentTimestampMs
+    const durationMs = resolvedDurationMs
+    const durSec = Math.max(0, durationMs / 1000)
+    const clampedTimeSec = Math.max(0, Math.min(durSec, Number(playTimeSec) || 0))
+
+    const relativeMs = Math.round(clampedTimeSec * 1000)
+    const currentTimestampMs = baseMs ? baseMs + relativeMs : 0
+    const absCurrentMs = currentTimestampMs
     const absEndMs = baseMs + durationMs
 
     return {
@@ -619,7 +744,7 @@ export default function useLogReplayPlayer2D({
       formattedCurrentTime: baseMs ? formatKST(absCurrentMs) : '0000-00-00 0:00:00.000 AM KST',
       formattedDuration: baseMs ? formatKST(absEndMs) : '0000-00-00 0:00:00.000 AM KST'
     }
-  }, [pathPoints, playTimeSec, t0EpochMs, formatKST])
+  }, [pathPoints, playTimeSec, t0EpochMs, formatKST, timelineMs])
 
   // =========================
   // 진행바 Hover 시간(툴팁) 로직
@@ -684,7 +809,7 @@ export default function useLogReplayPlayer2D({
   }, [])
 
   // 3D 싱크
-  const { threeMountRef, poses3d, setPoses3d, durationSec, currentTimeSec } = useThreeRobot(playIndex)
+  const { threeMountRef, poses3d, setPoses3d, durationSec, currentTimeSec } = useThreeRobot(playIndexRef.current)
 
   // ready 전환 시 한 번 센터
   const readyOnceRef = useRef(false)

@@ -15,7 +15,6 @@ const StatCard = styled.div`
   border-radius: 10px;
   background: var(--color-neutral-10, #fff);
   border: 1px solid var(--color-secondary-20, #dadde2);
-  border-left: 4px solid ${({ $color }) => $color};
 `
 
 const SourceName = styled.div`

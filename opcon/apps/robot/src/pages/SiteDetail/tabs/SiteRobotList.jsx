@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { useUserStore } from '@repo/stores'
 import { deviceApis } from '@/apis'
 import { toYmdHmKST } from '@/utils/dateUtils'
+import { getStatusInfo } from '@/utils/robotUtils'
 
 const SiteRobotList = ({ siteId }) => {
   const { t } = useTranslation('robot')
@@ -73,6 +74,10 @@ const SiteRobotList = ({ siteId }) => {
     {
       name: t('registerStatus'),
       selector: (row) => row.deviceRegStatus ?? '', // 정렬용 원시값
+      cell: (row) => {
+        const { className, textKey } = getStatusInfo(row.deviceRegStatus ?? '')
+        return <span className={`px-4 py-[3px] rounded-full text-[10px] ${className}`}>{t(textKey)}</span>
+      },
       sortable: true
     }
   ]

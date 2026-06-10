@@ -6,17 +6,17 @@ const SvgLanguageJp = lazy(() => import('../../../assets/svgs/languages_jp.svg')
 
 const languageOptions = [
   {
-    key: 'ko',
+    key: 'ko-KR',
     name: '한국어',
     icon: SvgLanguageKr
   },
   {
-    key: 'en',
+    key: 'en-US',
     name: 'English',
     icon: SvgLanguageUs
   },
   {
-    key: 'ja',
+    key: 'ja-JP',
     name: '日本語',
     icon: SvgLanguageJp
   }

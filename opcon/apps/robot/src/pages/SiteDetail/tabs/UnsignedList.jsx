@@ -5,6 +5,7 @@ import { useUserStore } from '@repo/stores'
 import { deviceApis } from '@/apis'
 import { toYmdHmKST } from '@/utils/dateUtils'
 import { toast } from 'react-toastify'
+import { getStatusInfo } from '@/utils/robotUtils'
 
 const UnsignedList = ({ siteId }) => {
   const { t } = useTranslation('robot')
@@ -104,6 +105,10 @@ const UnsignedList = ({ siteId }) => {
     {
       name: t('registerStatus'),
       selector: (row) => row.deviceRegStatus ?? '', // 정렬용 원시값
+      cell: (row) => {
+        const { className, textKey } = getStatusInfo(row.deviceRegStatus ?? '')
+        return <span className={`px-4 py-[3px] rounded-full text-[10px] ${className}`}>{t(textKey)}</span>
+      },
       sortable: true
     }
   ]

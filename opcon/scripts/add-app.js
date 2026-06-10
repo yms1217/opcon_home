@@ -39,9 +39,9 @@ console.log(`> Using ports: Server=${nextServerPort}, Preview=${nextPreviewPort}
 // 2. Create Files in apps/{appName}
 console.log(`> Creating apps/${appName}...`)
 fs.mkdirSync(path.join(NEW_APP_DIR, 'src'), { recursive: true })
-fs.mkdirSync(path.join(NEW_APP_DIR, 'locales', 'ko'), { recursive: true })
-fs.mkdirSync(path.join(NEW_APP_DIR, 'locales', 'en'), { recursive: true })
-fs.mkdirSync(path.join(NEW_APP_DIR, 'locales', 'ja'), { recursive: true })
+fs.mkdirSync(path.join(NEW_APP_DIR, 'locales', 'ko-KR'), { recursive: true })
+fs.mkdirSync(path.join(NEW_APP_DIR, 'locales', 'en-US'), { recursive: true })
+fs.mkdirSync(path.join(NEW_APP_DIR, 'locales', 'ja-JP'), { recursive: true })
 
 const pkgJson = {
   name: appName,
@@ -88,24 +88,24 @@ const pkgJson = {
 fs.writeFileSync(path.join(NEW_APP_DIR, 'package.json'), JSON.stringify(pkgJson, null, 2))
 
 // Locales initialization
-;['ko', 'en', 'ja'].forEach((lang) => {
-  const routeJson = lang === 'ko' ? { home: '홈' } : lang === 'en' ? { home: 'Home' } : { home: 'ホーム' }
+;['ko-KR', 'en-US', 'ja-JP'].forEach((lang) => {
+  const routeJson = lang === 'ko-KR' ? { home: '홈' } : lang === 'en-US' ? { home: 'Home' } : { home: 'ホーム' }
   fs.writeFileSync(path.join(NEW_APP_DIR, 'locales', lang, 'route.json'), JSON.stringify(routeJson, null, 2))
 })
 
 // Locales index.js
-const localesIndexJs = `import koRoute from './ko/route.json'
-import enRoute from './en/route.json'
-import jaRoute from './ja/route.json'
+const localesIndexJs = `import koRoute from './ko-KR/route.json'
+import enRoute from './en-US/route.json'
+import jaRoute from './ja-JP/route.json'
 
 export const translations = {
-  ko: {
+  ko-KR: {
     route: koRoute
   },
-  en: {
+  en-US: {
     route: enRoute
   },
-  ja: {
+  ja-JP: {
     route: jaRoute
   }
 }
@@ -137,8 +137,8 @@ if (!i18n.isInitialized) {
     .use(initReactI18next)
     .init({
       resources,
-      supportedLngs: ['ko', 'en', 'ja'],
-      fallbackLng: 'ko',
+      supportedLngs: ['ko-KR', 'en-US', 'ja-JP'],
+      fallbackLng: 'ko-KR',
       interpolation: {
         escapeValue: false
       },
@@ -409,7 +409,7 @@ if (fs.existsSync(routesPath)) {
 }
 
 const localesDir = path.join(ROOT_DIR, 'packages', 'locales', 'src')
-const locales = ['en', 'ja', 'ko']
+const locales = ['ko-KR', 'en-US', 'ja-JP']
 locales.forEach((lang) => {
   const layoutJsonPath = path.join(localesDir, lang, 'layout.json')
   if (fs.existsSync(layoutJsonPath)) {

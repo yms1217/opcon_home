@@ -1,15 +1,16 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { artifactApis } from '@repo/apis'
 import { uploadMultipartToS3, uploadSingleFileToS3 } from '@repo/utils'
-import { useOrganizationStore } from '@repo/stores'
+import { useOrganizationStore, useErrorStore } from '@repo/stores'
 
-const CHUNK_SIZE = 1024 * 1024 * 5 // 5MB
+const CHUNK_SIZE = 1024 * 1024 * 10 // 10MB
 
 export const useS3Upload = () => {
   const [isUploading, setIsUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [error, setError] = useState(null)
   const [uploadId, setUploadId] = useState(null)
+  const abortControllerRef = useRef(null)
   const { company } = useOrganizationStore()
 
   const uploadFile = async (artifactData, artifactFile, manifestFile) => {
@@ -17,6 +18,9 @@ export const useS3Upload = () => {
     setUploadProgress(0)
     setError(null)
     setUploadId(null)
+
+    abortControllerRef.current = new AbortController()
+    const signal = abortControllerRef.current.signal
 
     const artifactChunkCount = artifactFile ? Math.ceil(artifactFile.size / CHUNK_SIZE) : 0
     const manifestChunkCount = manifestFile ? Math.ceil(manifestFile.size / CHUNK_SIZE) : 0
@@ -41,7 +45,6 @@ export const useS3Upload = () => {
         }
       }
       const presignedRes = await artifactApis.requestUploadUrl(payload)
-      console.log('Upload URL results:', presignedRes.results)
 
       const { artifactUrls, artifactUploadId, manifestUrls } = presignedRes.results
       setUploadId(artifactUploadId)
@@ -52,6 +55,7 @@ export const useS3Upload = () => {
         await uploadSingleFileToS3({
           file: manifestFile,
           presignedUrl: manifestUrls[0],
+          signal,
           onProgress: (progress) => {
             console.log('Manifest progress:', progress)
             setUploadProgress(progress)
@@ -68,6 +72,7 @@ export const useS3Upload = () => {
               file: artifactFile,
               presignedUrls: artifactUrls,
               chunkSize: CHUNK_SIZE,
+              signal,
               onProgress: (progress) => {
                 console.log('Artifact progress:', progress)
                 setUploadProgress(progress)
@@ -80,7 +85,8 @@ export const useS3Upload = () => {
         } else {
           await uploadSingleFileToS3({
             file: artifactFile,
-            presignedUrl: artifactUrl[0],
+            presignedUrl: artifactUrls[0],
+            signal,
             onProgress: (progress) => {
               console.log('Artifact progress:', progress)
               setUploadProgress(progress)
@@ -99,12 +105,17 @@ export const useS3Upload = () => {
         fileName: artifactFile.name,
         chunkCount: artifactChunkCount
       })
-      console.log('completeResults', completeResults)
       return completeResults
     } catch (err) {
+      if (err.name === 'CanceledError' || err.message === 'canceled') {
+        console.log('Upload was canceled by user')
+        const cancelError = new Error('Upload Canceled')
+        cancelError.code = 'UPLOAD_CANCELED'
+        return { error: cancelError }
+      }
       console.error('Artifact upload failed:', err)
       setError(err)
-      throw err
+      return { error: err }
     } finally {
       setIsUploading(false)
       setUploadId(null)
@@ -113,6 +124,10 @@ export const useS3Upload = () => {
 
   const abortUpload = async () => {
     try {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+        abortControllerRef.current = null
+      }
       if (uploadId) {
         await artifactApis.abortMultipartUpload({
           uploadId: uploadId

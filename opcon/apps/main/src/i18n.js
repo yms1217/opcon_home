@@ -22,8 +22,8 @@ if (!i18n.isInitialized) {
     .use(initReactI18next)
     .init({
       resources,
-      supportedLngs: ['ko', 'en', 'ja'],
-      fallbackLng: 'ko',
+      supportedLngs: ['ko-KR', 'en-US', 'ja-JP'],
+      fallbackLng: 'ko-KR',
       interpolation: {
         escapeValue: false
       },

@@ -1,4 +1,4 @@
-import { persist } from 'zustand/middleware'
+import { persist, createJSONStorage } from 'zustand/middleware'
 import { create } from 'zustand'
 
 function getCurrentRoute(gnb, path) {
@@ -54,7 +54,10 @@ export const useRouteStore = create(
     }),
     {
       name: 'STORE_ROUTE',
-      getStorage: () => sessionStorage
+      storage: createJSONStorage(() => sessionStorage),
+      partialize: (state) => ({
+        backPath: state.backPath
+      })
     }
   )
 )

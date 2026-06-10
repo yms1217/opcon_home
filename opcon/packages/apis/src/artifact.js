@@ -1,7 +1,7 @@
 import createClient from './client'
 import { ENDPOINTS } from './constants'
 
-const axiosOta = createClient(import.meta.env.VITE_API_BASE_URL)
+const axiosOta = createClient(import.meta.env.VITE_OTA_API_BASE_URL)
 const mockUpData = false // import.meta.env.VITE_MODE !== 'local'
 const packageTypeOptions = ['docker', 'xml', 'package']
 
@@ -43,7 +43,7 @@ const retrieveArtifacts = async (orgIds, id) => {
       }, 500)
     })
   } else {
-    const response = await axiosOta.get(ENDPOINTS.ARTIFACT + '/retrieveArtifact', { params })
+    const response = await axiosOta.get(ENDPOINTS.ARTIFACT, { params })
     return response
   }
 }
@@ -83,8 +83,13 @@ const abortMultipartUpload = async (data) => {
   return response
 }
 
+const failedMultipartUpload = async (data) => {
+  const response = await axiosOta.post(ENDPOINTS.ARTIFACT + '/failedMultipartUpload', data)
+  return response
+}
+
 const saveArtifact = async (data) => {
-  const response = await axiosOta.put(ENDPOINTS.ARTIFACT + '/saveArtifact', data)
+  const response = await axiosOta.put(ENDPOINTS.ARTIFACT, data)
   return response
 }
 
@@ -93,6 +98,6 @@ export const artifactApis = {
   requestUploadUrl,
   completeMultipartUpload,
   abortMultipartUpload,
+  failedMultipartUpload,
   saveArtifact
 }
-

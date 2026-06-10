@@ -18,6 +18,8 @@ export const ContentWrapper = styled.div`
 
 export const MainContent = styled.main`
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   overflow-y: auto;
   padding: 20px;
   position: relative;
@@ -32,10 +34,10 @@ export const StyledLayout = styled.div`
   height: 100%;
   display: grid;
   grid-template-areas:
-    'header  header    '
-    'sideBar scrollArea';
+    'header  header     header'
+    'sideBar scrollArea assistant';
   grid-template-rows: var(--header-height) 1fr;
-  grid-template-columns: var(--sidebar-width) 1fr;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) auto;
 
   & > .header {
     position: relative;
@@ -53,15 +55,33 @@ export const StyledLayout = styled.div`
     position: relative;
     grid-area: scrollArea;
     z-index: 80;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
 
     & > .main {
       display: flex;
       flex-direction: column;
+      min-width: 0;
+      min-height: 0;
       padding: 2.4rem 32px;
     }
   }
 
+  & > .aiAssistantPanel {
+    position: relative;
+    grid-area: assistant;
+    z-index: 85;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+  }
+
   @media all and (max-width: 767px) {
+    grid-template-areas:
+      'header  header'
+      'sideBar scrollArea';
     grid-template-columns: 0 1fr;
 
     & > .sideBar {
@@ -73,6 +93,10 @@ export const StyledLayout = styled.div`
 
     & > .scrollArea > .main {
       padding: 16px;
+    }
+
+    & > .aiAssistantPanel {
+      display: none;
     }
   }
 `

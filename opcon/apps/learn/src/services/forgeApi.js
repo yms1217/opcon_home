@@ -4,10 +4,10 @@ const FORGE_API = import.meta.env.VITE_FORGE_BASE_URL || 'http://localhost:3000'
 const MOCK_TRAINING_JOBS = [
   {
     id: 'job-001',
-    name: '신발 정리 Fine-tuning',
+    name: '자제 팔레타이징 Fine-tuning',
     status: 'running',
     foundationModel: 'OpenVLA-OFT',
-    dataset: 'ds-신발정리-v2',
+    dataset: 'ds-자제팔레타이징-v2',
     startedAt: '2026-06-08T08:00:00Z',
     progress: 72,
   },
@@ -23,7 +23,7 @@ const MOCK_TRAINING_JOBS = [
   },
   {
     id: 'job-003',
-    name: '수건 접기 학습',
+    name: '재고 검수 분류 학습',
     status: 'queued',
     foundationModel: 'RDT-1B',
     dataset: 'ds-towel-v1',
@@ -33,15 +33,15 @@ const MOCK_TRAINING_JOBS = [
 ]
 
 const MOCK_DATASETS = [
-  { id: 'ds-신발정리-v2', name: '신발정리 v2', episodeCount: 180, source: 'tms', createdAt: '2026-06-01' },
+  { id: 'ds-자제팔레타이징-v2', name: '자제팔레타이징 v2', episodeCount: 180, source: 'tms', createdAt: '2026-06-01' },
   { id: 'ds-pick-place-v1', name: 'Pick&Place v1', episodeCount: 1800, source: 'teleop', createdAt: '2026-05-20' },
-  { id: 'ds-towel-v1', name: '수건 접기 v1', episodeCount: 45, source: 'lbw', createdAt: '2026-06-05' },
+  { id: 'ds-towel-v1', name: '재고 검수 분류 v1', episodeCount: 45, source: 'lbw', createdAt: '2026-06-05' },
 ]
 
 const MOCK_MODELS = [
   {
     id: 'model-001',
-    name: '신발정리 Fine-tuned v1',
+    name: '자제팔레타이징 Fine-tuned v1',
     baseModel: 'OpenVLA-OFT',
     validationScore: 0.87,
     status: 'review-pending',

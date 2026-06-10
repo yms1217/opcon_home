@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, lazy } from 'react'
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { MainLayout, Toast } from '@repo/ui'
 import { GlobalStyle } from '@repo/ui/styles'
@@ -7,23 +7,24 @@ import { useUserStore } from '@repo/stores'
 import { useTranslation } from 'react-i18next'
 import 'react-toastify/dist/ReactToastify.css'
 import './i18n'
-
 import { LearningProvider } from './context/LearningContext'
-import LauncherPage from './pages/LauncherPage'
-import TmsLearningPage from './pages/TmsLearningPage'
-import TmsEpisodeCandidatePage from './pages/TmsEpisodeCandidatePage'
-import TeleopPage from './pages/TeleopPage'
-import LearnByWatchingPage from './pages/LearnByWatchingPage'
-import SimAugPage from './pages/SimAugPage'
-import UploadPage from './pages/UploadPage'
-import DataReadinessPage from './pages/DataReadinessPage'
-import TrainingStatusPage from './pages/TrainingStatusPage'
-import ReviewApprovalPage from './pages/ReviewApprovalPage'
+
+// ── lazy imports ──
+const LauncherPage = lazy(() => import('./pages/LauncherPage'))
+const TmsLearningPage = lazy(() => import('./pages/TmsLearningPage'))
+const TmsEpisodeCandidatePage = lazy(() => import('./pages/TmsEpisodeCandidatePage'))
+const TeleopPage = lazy(() => import('./pages/TeleopPage'))
+const LearnByWatchingPage = lazy(() => import('./pages/LearnByWatchingPage'))
+const SimAugPage = lazy(() => import('./pages/SimAugPage'))
+const UploadPage = lazy(() => import('./pages/UploadPage'))
+const DataReadinessPage = lazy(() => import('./pages/DataReadinessPage'))
+const TrainingStatusPage = lazy(() => import('./pages/TrainingStatusPage'))
+const ReviewApprovalPage = lazy(() => import('./pages/ReviewApprovalPage'))
 
 const appRoutes = [
   {
     name: 'launcher',
-    path: '/learning/',
+    path: '/learning/home',
     prefix: 'learning',
     icon: 'home',
     element: <LauncherPage />,
@@ -123,7 +124,7 @@ const App = () => {
                 }
               />
             ))}
-            <Route path="/learning" element={<Navigate to="/learning/" replace />} />
+            <Route path="*" element={<Navigate to="/learning/home" replace />} />
           </Routes>
         </LearningProvider>
       </React.Suspense>

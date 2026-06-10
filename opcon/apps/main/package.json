@@ -42,6 +42,7 @@
     "globals": "^16.5.0",
     "prettier": "^3.7.4",
     "robot": "workspace:*",
-    "vite": "^6.3.5"
+    "learn": "workspace:*",
+    "vite": "^7.2.4"
   }
 }

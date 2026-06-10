@@ -1,9 +1,9 @@
-import koRoute from './ko/route.json'
-import enRoute from './en/route.json'
-import jaRoute from './ja/route.json'
+import koRoute from './ko-KR/route.json'
+import enRoute from './en-US/route.json'
+import jaRoute from './ja-JP/route.json'
 
 export const translations = {
-  ko: { route: koRoute },
-  en: { route: enRoute },
-  ja: { route: jaRoute }
+  'ko-KR': { route: koRoute },
+  'en-US': { route: enRoute },
+  'ja-JP': { route: jaRoute }
 }

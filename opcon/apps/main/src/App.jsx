@@ -8,11 +8,11 @@ import ErrorPage from './pages/Error'
 import SetPassword from './pages/auth/SetPassword'
 import ResetPassword from './pages/auth/ResetPassword'
 
-// const OTA = React.lazy(() => import('ota/App'))
+const OTA = React.lazy(() => import('ota/App'))
 const Robot = React.lazy(() => import('robot/App'))
-const Learn = React.lazy(() => import('learn/App'))
-// const CMS = React.lazy(() => import('cms/App'))
-// const TMS = React.lazy(() => import('tms/App'))
+const CMS = React.lazy(() => import('cms/App'))
+const TMS = React.lazy(() => import('tms/App'))
+const Learning = React.lazy(() => import('learn/App'))
 
 const getAppPrefix = (pathname) => {
   return pathname.split('/').filter(Boolean)[0] || ''
@@ -47,14 +47,14 @@ const App = () => {
           <Route path="/set-password" element={<SetPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/" element={<RootRedirect />} />
-          {/* <Route
+          <Route
             path="/ota/*"
             element={
               <MainLayout currentApp={appPrefix}>
                 <OTA />
               </MainLayout>
             }
-          /> */}
+          />
           <Route
             path="/robot/*"
             element={
@@ -64,14 +64,6 @@ const App = () => {
             }
           />
           <Route
-            path="/learning/*"
-            element={
-              <MainLayout currentApp={appPrefix}>
-                <Learn />
-              </MainLayout>
-            }
-          />
-          {/* <Route
             path="/cms/*"
             element={
               <MainLayout currentApp={appPrefix}>
@@ -86,8 +78,15 @@ const App = () => {
                 <TMS />
               </MainLayout>
             }
-          /> */}
-
+          />
+          <Route
+            path="/learn/*"
+            element={
+              <MainLayout currentApp={appPrefix}>
+                <Learning />
+              </MainLayout>
+            }
+          />
         </Routes>
       </React.Suspense>
     </I18nextProvider>

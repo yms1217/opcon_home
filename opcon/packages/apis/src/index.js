@@ -4,5 +4,6 @@ export * from './common'
 export { artifactApis } from './artifact'
 export * from './constants'
 export { organizationApis } from './organization'
+export { groupApis } from './group'
+export { siteApis } from './site'
 export { default as robotClient } from './robotClient'
-

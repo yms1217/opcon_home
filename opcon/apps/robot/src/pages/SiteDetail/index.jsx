@@ -3,6 +3,7 @@ import { StyledPageContent, Title, Button, Tabs, Tab } from '@repo/ui'
 import { useTranslation } from 'react-i18next'
 import SiteRobotList from './tabs/SiteRobotList'
 import UnsignedList from './tabs/UnsignedList'
+import SignedList from './tabs/SignedList'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft } from '@/assets/icon'
 
@@ -23,6 +24,9 @@ const SiteDetail = () => {
         </Tab>
         <Tab id="tabUnsigned" label={t('unassigned')}>
           <UnsignedList siteId={siteId} />
+        </Tab>
+        <Tab id="tabOtherSite" label={t('다른 사이트')}>
+          <SignedList siteId={siteId} />
         </Tab>
       </Tabs>
     </StyledPageContent>

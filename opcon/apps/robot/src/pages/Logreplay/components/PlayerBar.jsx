@@ -69,9 +69,26 @@ function PlayerBar({
       ✓
     </span>
   )
-
+  const seekStartRef = useRef(0)
   const clampedPlay = Math.max(0, Math.min(1, Number.isFinite(playRatio) ? playRatio : 0))
-  const clampedBuffer = Math.max(0, Math.min(1, Number.isFinite(bufferRatio) ? bufferRatio : 0))
+
+  const isSeekDot = bufferRatio < 0
+  // seek 시 버퍼 바 숨김, 재생 시 원래 값 표시
+  const clampedBuffer = isSeekDot ? 0 : Math.max(0, Math.min(1, Number.isFinite(bufferRatio) ? bufferRatio : 0))
+
+  // seek 시 시작점 기록 → 이후 재생은 해당 시점부터 fill
+  if (isSeekDot) {
+    seekStartRef.current = clampedPlay
+  } else if (clampedPlay < seekStartRef.current - 0.003) {
+    seekStartRef.current = 0 // 끝→처음 재시작
+  }
+  const fillStart = isSeekDot ? clampedPlay : seekStartRef.current
+  const fillWidth = Math.max(0, clampedPlay - fillStart)
+  const showFill = clampedPlay > 0.001 // 초기 상태(0)에서 dot 숨김
+
+  // 버퍼 바도 fill 시작점 이후만 표시 (seek 이전 구간에 회색이 차지 않도록)
+  const bufferStart = fillStart
+  const bufferFillWidth = Math.max(0, clampedBuffer - bufferStart)
 
   const onPrevClick = (e) => {
     e.preventDefault()
@@ -92,7 +109,6 @@ function PlayerBar({
     handleTogglePlay?.()
   }
 
-  //console.log('[playBar]')
   return (
     <div style={S.playerBarFull}>
       {/* 1) 상단: 진행바(버퍼 + 진행) */}
@@ -112,9 +128,28 @@ function PlayerBar({
           onMouseLeave={onProgressMouseLeave} // ★ hook 로직 사용
         >
           {/* 버퍼(로딩) 바 */}
-          <div style={{ ...S.progressBuffer, width: `${clampedBuffer * 100}%` }} />
+          {/* <div
+            style={{
+              ...S.progressBuffer,
+              position: 'absolute',
+              left: `${bufferStart * 100}%`,
+              width: `${bufferFillWidth * 100}%`
+            }}
+          /> */}
+          {/* on-demand HTTP Range 방식이므로 버퍼 바 불필요 — 필요 시 주석 해제 */}
           {/* 진행 채움 */}
-          <div style={{ ...S.progressFill, width: `${clampedPlay * 100}%` }} />
+
+          {showFill && (
+            <div
+              style={{
+                ...S.progressFill,
+                position: 'absolute',
+                left: `${fillStart * 100}%`,
+                width: fillWidth > 0.003 ? `${fillWidth * 100}%` : '3px'
+              }}
+            />
+          )}
+
           {hoverVisible && durationMs > 0 && (
             <div style={{ ...S.speedMenu.tooltipWrapStyle, zIndex: 2 }} aria-hidden="true">
               <div

@@ -1,0 +1,20 @@
+{
+  "SideBar": {
+    "gnb": {
+      "ota": "S/W 배포",
+      "ebme": "EBME",
+      "robot": "로봇 관리",
+      "cms": "콘텐츠 관리",
+      "tms": "TMS",
+      "learning": "학습(TBD)"
+    }
+  },
+  "LanguageSelect": {
+    "button": "언어"
+  },
+  "Footer": {
+    "customerInquiry": "고객 문의",
+    "customerInquiry2": "고객 문의2"
+  },
+  "loading": "로딩 중..."
+}

@@ -24,6 +24,7 @@ import MapManagement from './pages/MapManagement'
 import MapDetail from './pages/MapManagement/MapDetail'
 import MapEdit from './pages/MapManagement/MapEdit'
 import MapDeploy from './pages/MapManagement/MapDeploy'
+import AiLogManagement from './pages/AiLogManagement'
 
 const appRoutes = [
   {
@@ -52,38 +53,49 @@ const appRoutes = [
       }
     ]
   },
+  // {
+  //   name: 'mapManagement',
+  //   path: '/robot/maps',
+  //   prefix: 'robot',
+  //   icon: 'map',
+  //   element: <MapManagement />,
+  //   accessLevel: [0, 1, 2, 3],
+  //   depth: [
+  //     {
+  //       name: 'mapDetail',
+  //       hide: true,
+  //       hasBack: true,
+  //       path: '/robot/maps/detail',
+  //       prefix: 'robot',
+  //       element: <MapDetail />
+  //     },
+  //     {
+  //       name: 'mapEdit',
+  //       hide: true,
+  //       hasBack: true,
+  //       path: '/robot/maps/edit',
+  //       prefix: 'robot',
+  //       element: <MapEdit />
+  //     },
+  //     {
+  //       name: 'mapDeploy',
+  //       hide: true,
+  //       hasBack: true,
+  //       path: '/robot/maps/deploy',
+  //       prefix: 'robot',
+  //       element: <MapDeploy />
+  //     }
+  //   ]
+  // },
+
   {
-    name: 'mapManagement',
-    path: '/robot/maps',
+    name: 'aiLogManagement',
+    path: '/robot/ailog',
     prefix: 'robot',
-    icon: 'map',
-    element: <MapManagement />,
-    accessLevel: [0, 1, 2, 3],
+    icon: 'support',
+    element: <AiLogManagement />,
+    accessLevel: [1, 2, 3],
     depth: [
-      {
-        name: 'mapDetail',
-        hide: true,
-        hasBack: true,
-        path: '/robot/maps/detail',
-        prefix: 'robot',
-        element: <MapDetail />
-      },
-      {
-        name: 'mapEdit',
-        hide: true,
-        hasBack: true,
-        path: '/robot/maps/edit',
-        prefix: 'robot',
-        element: <MapEdit />
-      },
-      {
-        name: 'mapDeploy',
-        hide: true,
-        hasBack: true,
-        path: '/robot/maps/deploy',
-        prefix: 'robot',
-        element: <MapDeploy />
-      }
     ]
   },
   {
@@ -149,14 +161,11 @@ const App = () => {
   //console.log('isLoggedIn=' + isLoggedIn)
 
   if (!isLoggedIn) {
-    if (!import.meta.env.VITE_SKIP_LOGIN || import.meta.env.VITE_SKIP_LOGIN != 'Y') {
-      window.location.href = '/login'
-      return
-    }
+    window.location.href = '/login'
+    return
   }
 
   const allRoutes = useMemo(() => flattenRoutes(appRoutes), [])
-
   return (
     <>
       <GlobalStyle />

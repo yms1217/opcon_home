@@ -4,7 +4,7 @@ import { SOURCE_COLOR_MAP } from '../../styles/theme'
 
 const CardWrapper = styled.div`
   background: var(--color-neutral-10, #fff);
-  border: 1px solid ${({ $color }) => `${$color}44`};
+  border: 1px solid #e0e0e0;
   border-radius: 14px;
   padding: 24px;
   cursor: pointer;
@@ -15,21 +15,9 @@ const CardWrapper = styled.div`
   position: relative;
   overflow: hidden;
 
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 3px;
-    background: ${({ $color }) => $color};
-    border-radius: 14px 14px 0 0;
-  }
-
   &:hover {
-    border-color: ${({ $color }) => `${$color}88`};
+    border-color: #4A90D9;
     transform: translateY(-2px);
-    box-shadow: 0 8px 24px ${({ $color }) => `${$color}22`};
   }
 `
 
@@ -108,7 +96,6 @@ export default function SourceCard({ card, onNavigate }) {
   return (
     <CardWrapper $color={color} onClick={handleClick}>
       <CardTop>
-        <IconBox $color={color}>{ICONS[card.id] || '📌'}</IconBox>
         <CardTitle>{card.title}</CardTitle>
       </CardTop>
       <CardDesc>{card.description}</CardDesc>

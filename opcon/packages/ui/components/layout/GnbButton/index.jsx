@@ -5,7 +5,7 @@ import { StyledGnbButton, StyledGnbLink, StyledGnbExternalLink } from './styles'
 import { memo } from 'react'
 import { getAppPrefix } from '@repo/utils'
 
-const GnbButton = ({ as = 'NavLink', name, icon, path, depthLevel = 0, prefix, onClick }) => {
+const GnbButton = ({ as = 'NavLink', name, icon, path, depthLevel = 0, prefix, onClick, hideIcon = false }) => {
   const location = useLocation()
   const { pathname } = location
   const { compactSideBar, openDepth, setOpenDepth } = useSideBarStore()
@@ -119,7 +119,7 @@ const GnbButton = ({ as = 'NavLink', name, icon, path, depthLevel = 0, prefix, o
 
   return (
     <Component {...props[finalAs]}>
-      {icon && <Icon name={icon} size={depthLevel === 0 ? 32 : 24} />}
+      {icon && !hideIcon && <Icon name={icon} size={depthLevel === 0 ? 32 : 24} />}
       {(depthLevel === 0 && !compactSideBar) || depthLevel === 1 ? name : null}
     </Component>
   )

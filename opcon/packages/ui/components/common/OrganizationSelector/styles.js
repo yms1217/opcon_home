@@ -7,8 +7,11 @@ export const DropdownContainer = styled.div`
   margin-bottom: 2rem;
 
   @media all and (min-width: 1580px) {
-    width: 90%;
-    margin: 0 auto 2rem auto;
+    ${({ $disableCenter }) =>
+      !$disableCenter &&
+      `
+        width: 90%;
+        margin: 0 auto 2rem auto;
+      `}
   }
 `
-

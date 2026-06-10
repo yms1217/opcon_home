@@ -18,7 +18,7 @@ export const DivPageBody = styled.div`
 `
 
 export const DivDashState = styled.div`
-  width: calc(100% / 3 * 2 - 1.2rem);
+  width: calc(100% / 3 * 2 - 3.2rem);
   flex-direction: column;
   flex: 1 1 0%;
   display: flex;
@@ -53,7 +53,7 @@ export const ArticleStateItem = styled.article`
   color: #333;
   justify-content: space-between;
   flex-direction: column;
-  height: 14rem;
+  height: 10.6rem;
   flex: 1 1 0%;
   display: flex;
   border-radius: 1rem;
@@ -127,5 +127,13 @@ export const DivDashAlarmTable = styled.div`
   > * {
     flex-basis: auto;
   }
+`
+
+export const SectionMap = styled.section`
+  padding: 2rem;
+  background: var(--color-neutral-10);
+  border: 1px solid var(--color-secondary-20);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-00);
 `
 

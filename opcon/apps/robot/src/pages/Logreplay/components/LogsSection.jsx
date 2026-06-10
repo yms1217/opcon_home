@@ -108,6 +108,11 @@ function PlainLogList({ lines, detectLevel, highlight, containerRefExternal, isL
     return lines.slice(lines.length - MAX_RENDER_LINES)
   }, [lines])
 
+  const displayStart = useMemo(() => {
+    const n = Array.isArray(lines) ? lines.length : 0
+    return n > MAX_RENDER_LINES ? n - MAX_RENDER_LINES : 0
+  }, [lines])
+
   const levelCacheRef = useRef(new Map())
   const getLevel = useCallback(
     (text) => {
@@ -156,14 +161,16 @@ function PlainLogList({ lines, detectLevel, highlight, containerRefExternal, isL
     <div ref={setHostRef} style={{ ...S.logBody, ...S.logBodyPlain }} role="log" aria-live="polite">
       {/* 로딩 중 */}
       {isLoading && <div style={S.logLine}>로그 로딩 중..</div>}
+
       {displayLines.map((line, idx) => {
-        // ✅ 개행이 포함된 로그는 한 row에서 여러 줄이 되어 겹침을 유발 → 표시용 치환
-        const text = String(lines[idx] ?? '').replace(/\r?\n/g, ' ⏎ ')
+        const text = String(line ?? '').replace(/\r?\n/g, ' ⏎')
+
         const lvl = getLevel(text)
         const style = lvl === 'WARN' ? { ...S.logLine, ...S.logLineWarn } : S.logLine
         const ref = idx === 0 ? firstRowRef : undefined
+
         return (
-          <div key={idx} ref={ref} style={style}>
+          <div key={displayStart + idx} ref={ref} style={style}>
             {highlight(text)}
           </div>
         )
@@ -314,6 +321,7 @@ function LogsSection({
 
   const keyword = (appliedKeyword || '').trim()
   const noKeyword = !keyword
+  const filterLevelCacheRef = useRef(new Map())
 
   // 핵심:
   // 1) 기본 상태(전체 레벨 ON + 검색어 없음) -> raw logLines 직접 표시
@@ -322,6 +330,8 @@ function LogsSection({
   const effectiveLines = useMemo(() => {
     const raw = Array.isArray(logLines) ? logLines : []
     const searched = Array.isArray(filteredLines) ? filteredLines : []
+
+    const cache = filterLevelCacheRef.current
 
     if (noKeyword && allOn) {
       return raw
@@ -333,17 +343,25 @@ function LogsSection({
           .filter(([, v]) => !!v)
           .map(([k]) => k)
       )
-
       if (active.size === 0) return []
 
       return raw.filter((line) => {
+        if (cache.has(line)) {
+          return active.has(cache.get(line))
+        }
+
         const lvl = detectLevel(String(line ?? '')) || 'INFO'
+        cache.set(line, lvl)
         return active.has(lvl)
       })
     }
 
     return searched
   }, [logLines, filteredLines, noKeyword, allOn, levelFilter, detectLevel])
+
+  useEffect(() => {
+    filterLevelCacheRef.current = new Map()
+  }, [sessionKey])
 
   const showInit = loadPhase === 'init' && !isLoadingLogs
   const showEmpty = loadPhase !== 'init' && !isLoadingLogs && (effectiveLines?.length ?? 0) === 0
@@ -425,9 +443,6 @@ function LogsSection({
   )
 }
 
-// 상위 렌더를 “세션/상태/라인 증분”으로만 발생
-const LINES_STEP = 60
-
 export default memo(LogsSection, (p, n) => {
   const pKey = `${p.selectedLabel || ''}||${p.selectedDate || ''}||${p.selectedMapId || ''}`
   const nKey = `${n.selectedLabel || ''}||${n.selectedDate || ''}||${n.selectedMapId || ''}`
@@ -435,6 +450,7 @@ export default memo(LogsSection, (p, n) => {
 
   if (p.isLoadingLogs !== n.isLoadingLogs) return false
   if ((p.logError || '') !== (n.logError || '')) return false
+  if (p.loadPhase !== n.loadPhase) return false
   if (p.detectLevel !== n.detectLevel) return false
   if (p.formatDate !== n.formatDate) return false
   if (p.logContainerRef !== n.logContainerRef) return false
@@ -455,15 +471,10 @@ export default memo(LogsSection, (p, n) => {
   if ((p.pendingKeyword || '') !== (n.pendingKeyword || '')) return false
   if ((p.appliedKeyword || '') !== (n.appliedKeyword || '')) return false
 
-  const prevFilteredLen = p.filteredLines?.length || 0
-  const nextFilteredLen = n.filteredLines?.length || 0
-  if (nextFilteredLen < prevFilteredLen) return false
-  if (nextFilteredLen - prevFilteredLen >= LINES_STEP) return false
-
-  const prevLogLen = p.logLines?.length || 0
-  const nextLogLen = n.logLines?.length || 0
-  if (nextLogLen < prevLogLen) return false
-  if (nextLogLen - prevLogLen >= LINES_STEP) return false
+  // ✅ 참조 비교: applyLogsByPlayhead가 이미 불필요한 setState를 guard하므로
+  //    참조가 바뀌면 항상 re-render (window 방식에서 소량 증분도 반영)
+  if (p.logLines !== n.logLines) return false
+  if (p.filteredLines !== n.filteredLines) return false
 
   // 위 조건을 모두 통과 → 스킵
   return true

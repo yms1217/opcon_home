@@ -3,16 +3,24 @@ import { useTranslation } from 'react-i18next'
 import Dropdown from '../Dropdown'
 import { DropdownContainer } from './styles'
 import { useOrganizationSelector } from '@repo/hooks'
-import { useOrganizationStore } from '@repo/stores'
+import { useOrganizationStore, useUserStore } from '@repo/stores'
 
-const OrganizationSelector = ({ onChange, supportAlls = [true, true], supportNone = [false, true], disabled }) => {
+const OrganizationSelector = ({
+  onChange,
+  supportAlls = [true, true],
+  supportNone = [false, true],
+  disabled,
+  disableCenter = false,
+  showLabel = false
+}) => {
   const { t } = useTranslation('common')
-  const { company, isLoading, defaultOrg } = useOrganizationSelector()
+  const { session } = useUserStore()
+  const { company, isLoading, defaultOrg } = useOrganizationSelector(session?.email)
 
   const depth = company?.orgDepth || 2
   const configs = [
-    { label: t('group'), placeholder: t('selectGroup'), minWidth: '250px' },
-    { label: t('site'), placeholder: t('selectSite'), minWidth: '250px' }
+    { label: t('group'), placeholder: t('selectGroup'), minWidth: '250px', defaultText: t('groupAll') },
+    { label: t('site'), placeholder: t('selectSite'), minWidth: '250px', defaultText: t('siteAll') }
   ]
 
   const {
@@ -26,18 +34,27 @@ const OrganizationSelector = ({ onChange, supportAlls = [true, true], supportNon
   const getActualSelectedOrgs = (values) => {
     if (!values || values.length === 0 || values[0] === 'none') return []
 
-    let currentActuals = allOrgs.filter((item) => !item.parentId)
+    const currentDefaultCode = defaultOrg?.code || null
+    let lastValidActuals = allOrgs.filter((item) => item.parentCode === currentDefaultCode)
+    let currentActuals = lastValidActuals
+
     for (let i = 0; i < depth; i++) {
       const val = values[i]
       if (!val || val === 'none') {
         break
       } else if (val === 'all') {
         if (i > 0) {
-          const parentIds = currentActuals.map((item) => String(item.id))
-          currentActuals = allOrgs.filter((item) => item.parentId && parentIds.includes(String(item.parentId)))
+          const parentCodes = currentActuals.map((item) => String(item.code))
+          currentActuals = allOrgs.filter((item) => item.parentCode && parentCodes.includes(String(item.parentCode)))
         }
       } else {
-        currentActuals = allOrgs.filter((item) => String(item.code) === String(val))
+        const matched = allOrgs.filter((item) => String(item.code) === String(val))
+        if (matched.length > 0) {
+          lastValidActuals = matched
+          currentActuals = matched
+        } else {
+          return lastValidActuals
+        }
       }
     }
     return currentActuals
@@ -49,35 +66,38 @@ const OrganizationSelector = ({ onChange, supportAlls = [true, true], supportNon
       setActualOrgs(orgs)
       const matchesOrg = (itemOrg) => {
         if (!itemOrg) return false
-        return orgs.some((org) => String(org.id) === String(itemOrg.id))
+        return orgs.some((org) => {
+          if (org.code && itemOrg.code && String(org.code) === String(itemOrg.code)) return true
+          if (org.id != null && itemOrg.id != null && String(org.id) === String(itemOrg.id)) return true
+          return false
+        })
       }
       onChange({ values: selectedValues, actualOrgs: orgs, matchesOrg })
     }
   }, [selectedValues, allOrgs, depth])
 
-  if (isLoading && allOrgs.length === 0) {
-    return null
-  }
-
-  const getOptionsForLevel = (levelIndex, parentId, currentItems) => {
+  const getOptionsForLevel = (levelIndex, parentCode, currentItems) => {
     if (allOrgs.length === 0) {
       return [{ name: 'None', value: 'none' }]
     }
 
     const parentItem =
-      parentId && parentId !== 'all' && parentId !== 'none' ? allOrgs.find((item) => item.code === parentId) : null
+      parentCode && parentCode !== 'all' && parentCode !== 'none'
+        ? allOrgs.find((item) => item.code === parentCode)
+        : null
 
-    const showNone = levelIndex === 0 && supportNone[levelIndex]
-    parentId === 'all' ||
+    const showNone =
+      supportNone[levelIndex] === true || (currentItems.length === 0 && supportNone[levelIndex] !== false)
+    parentCode === 'all' ||
       (parentItem && parentItem.roleName !== null && parentItem.roleName !== '' && parentItem.roleName !== undefined)
-    const showAll = currentItems.length > 1 && supportAlls[levelIndex]
+    const showAll = supportAlls[levelIndex]
 
     const options = []
-    if (showNone) {
-      options.push({ name: 'None', value: 'none' })
-    }
     if (showAll) {
-      options.push({ name: 'All', value: 'all' })
+      options.push({ name: configs[levelIndex].defaultText, value: 'all' })
+    }
+    if (showNone) {
+      options.push({ name: t('unassigned'), value: 'none' })
     }
     options.push(
       ...currentItems.map((item) => ({
@@ -88,13 +108,12 @@ const OrganizationSelector = ({ onChange, supportAlls = [true, true], supportNon
     return options
   }
 
-  const getNextLevelItems = (selectedValue, currentItems) => {
-    if (selectedValue === 'all') {
-      const currentIds = currentItems.map((item) => item.id)
-      return allOrgs.filter((item) => currentIds.includes(item.parentId))
-    } else if (selectedValue && selectedValue !== 'none') {
-      const selectedItem = allOrgs.find((item) => item.code === selectedValue)
-      return allOrgs.filter((item) => item.parentId === selectedItem?.id)
+  const getNextLevelItems = (selectedCode, currentItems) => {
+    if (selectedCode === 'all') {
+      const currentCodes = currentItems.map((item) => item.code)
+      return allOrgs.filter((item) => currentCodes.includes(item.parentCode))
+    } else if (selectedCode && selectedCode !== 'none') {
+      return allOrgs.filter((item) => item.parentCode === selectedCode)
     }
     return []
   }
@@ -103,13 +122,14 @@ const OrganizationSelector = ({ onChange, supportAlls = [true, true], supportNon
     const newValues = [...selectedValues]
     newValues[index] = value
 
-    let currentItems = allOrgs.filter((item) => !item.parentId)
+    const currentDefaultCode = defaultOrg?.code
+    let currentItems = allOrgs.filter((item) => item.parentCode === currentDefaultCode)
 
     for (let i = 0; i < depth; i++) {
-      const parentId = i > 0 ? newValues[i - 1] : null
+      const parentCode = i > 0 ? newValues[i - 1] : null
 
       if (i > index) {
-        const options = getOptionsForLevel(i, parentId, currentItems)
+        const options = getOptionsForLevel(i, parentCode, currentItems)
         newValues[i] = options.length > 0 ? options[0].value : ''
       }
 
@@ -121,24 +141,30 @@ const OrganizationSelector = ({ onChange, supportAlls = [true, true], supportNon
 
   const getLevelInfo = () => {
     const levels = []
-    let currentItems = allOrgs.filter((item) => item.parentId === defaultOrg?.id)
+
+    if (isLoading && (!allOrgs || allOrgs.length === 0)) {
+      return null
+    }
+
+    const currentDefaultCode = defaultOrg?.code
+    let currentItems = allOrgs.filter((item) => item.parentCode === currentDefaultCode)
 
     for (let i = 0; i < depth; i++) {
-      const parentId = i > 0 ? selectedValues[i - 1] : null
-      const selectedValue = selectedValues[i]
+      const parentCode = i > 0 ? selectedValues[i - 1] : null
+      const selectedCode = selectedValues[i]
       const config = configs[i] || {}
 
-      const options = getOptionsForLevel(i, parentId, currentItems)
+      const options = getOptionsForLevel(i, parentCode, currentItems)
 
       levels.push({
         options,
-        selectedValue,
-        label: config.label || `Level ${i + 1}`,
+        selectedCode,
+        label: showLabel ? config.label : null,
         placeholder: i === 0 && allOrgs.length === 0 ? t('noOrganization') : config.placeholder,
         minWidth: config.minWidth || ''
       })
 
-      currentItems = getNextLevelItems(selectedValue, currentItems)
+      currentItems = getNextLevelItems(selectedCode, currentItems)
     }
     return levels
   }
@@ -154,16 +180,17 @@ const OrganizationSelector = ({ onChange, supportAlls = [true, true], supportNon
   }
 
   return (
-    <DropdownContainer>
-      {levelInfos.map((info, index) => (
+    <DropdownContainer $disableCenter={disableCenter}>
+      {levelInfos?.map((info, index) => (
         <Dropdown
           key={index}
           label={info.label}
           minWidth={info.minWidth}
           size="lg"
-          value={info.selectedValue}
+          value={info.selectedCode}
           placeholder={info.placeholder}
           options={info.options}
+          showSearch={true}
           onChange={(val) => handleValueChange(index, val)}
           disabled={isDisabled(info, index)}
         />
@@ -173,4 +200,3 @@ const OrganizationSelector = ({ onChange, supportAlls = [true, true], supportNon
 }
 
 export default OrganizationSelector
-

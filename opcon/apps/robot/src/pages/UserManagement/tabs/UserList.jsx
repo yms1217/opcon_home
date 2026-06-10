@@ -34,7 +34,7 @@ const UserList = () => {
     for (var i = 0; i < tList.length; i++) {
       //userLevel이 더 높은 계정은 리스트에서 제외
       if (getUserLevelByuserRole(tList[i].userRole) > session.userLevel) {
-        break
+        continue
       }
       tList[i].createdAt = toYmdHmKST(tList[i].createdAt)
       loopList.push(tList[i])

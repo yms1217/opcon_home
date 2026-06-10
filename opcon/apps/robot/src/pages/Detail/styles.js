@@ -28,3 +28,45 @@ export const SectionList = styled.div`
   gap: 1.6rem;
 `
 
+export const ControlDiv = styled.div`
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)); /* grid-cols-2 */
+  gap: 8px; /* gap-2 */
+  margin-bottom: 16px; /* mb-4 */
+
+  @media (min-width: 640px) {
+    grid-template-columns: repeat(4, minmax(0, 1fr)); /* sm:grid-cols-4 */
+    margin-bottom: 20px; /* sm:mb-5 */
+  }
+`
+
+export const ControlBtn = styled.button`
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+
+  background-color: ${({ $danger }) => ($danger ? '#fee2e2' : '#e5e7eb')};
+  border: 1px solid #ffffff;
+  color: #555;
+
+  border-radius: 6px;
+  font-size: 14px;
+  transition: background-color 0.2s ease;
+
+  &:hover {
+    background-color: ${({ $danger }) => ($danger ? '#fecaca' : '#f8fafc')};
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    background-color: ${({ $danger }) => ($danger ? '#fee2e2' : '#e5e7eb')};
+  }
+
+  &:disabled:hover {
+    background-color: ${({ $danger }) => ($danger ? '#fee2e2' : '#e5e7eb')};
+  }
+`
+

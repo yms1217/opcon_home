@@ -24,7 +24,9 @@ const ModalEditSite = ({ isOpen, t, onClose, onConfirm, groupId, siteId, siteInf
       sido: '',
       sigungu: '',
       address1: '',
-      address2: ''
+      address2: '',
+      siteLat: '',
+      siteLng: ''
     }
   })
   const [isBtnValid, setIsBtnValid] = useState(false)
@@ -36,6 +38,8 @@ const ModalEditSite = ({ isOpen, t, onClose, onConfirm, groupId, siteId, siteInf
   const sigungu = watch('sigungu')
   const address1 = watch('address1')
   const address2 = watch('address2')
+  const siteLat = watch('siteLat')
+  const siteLng = watch('siteLng')
   const address2Ref = useRef(null)
 
   // 팝업 오픈 함수 (react-daum-postcode) [1](https://www.npmjs.com/package/react-daum-postcode)
@@ -54,7 +58,9 @@ const ModalEditSite = ({ isOpen, t, onClose, onConfirm, groupId, siteId, siteInf
           sido: siteInfo?.siteAddressState ?? '',
           sigungu: siteInfo?.siteAddressCity ?? '',
           address1: siteInfo?.siteAddressOne ?? '',
-          address2: siteInfo?.siteAddressTwo ?? ''
+          address2: siteInfo?.siteAddressTwo ?? '',
+          siteLat: siteInfo?.siteLatitude ?? '',
+          siteLng: siteInfo?.siteLongitude ?? ''
         },
         { keepDirty: false }
       )
@@ -65,8 +71,14 @@ const ModalEditSite = ({ isOpen, t, onClose, onConfirm, groupId, siteId, siteInf
 
   // 버튼 활성화 조건(예시): 이름 필수 + 기존값과 달라졌는지
   useEffect(() => {
-    setIsBtnValid(siteName?.trim().length > 0 && (siteInfo?.siteName ?? '') !== siteName)
-  }, [siteName, siteInfo])
+    setIsBtnValid(
+      (siteName?.trim().length > 0 && (siteInfo?.siteName ?? '') !== siteName) ||
+        (address1?.trim().length > 0 && (siteInfo?.siteAddressOne ?? '') !== address1) ||
+        (address2?.trim().length > 0 && (siteInfo?.siteAddressTwo ?? '') !== address2)
+    )
+  }, [siteName, address1, address2, siteInfo])
+
+  const geocoder = new kakao.maps.services.Geocoder()
 
   const handleOpenAddressSearch = useCallback(() => {
     openPostcode({
@@ -81,6 +93,17 @@ const ModalEditSite = ({ isOpen, t, onClose, onConfirm, groupId, siteId, siteInf
         setValue('address1', nextAddr1, { shouldDirty: true, shouldValidate: true })
         setValue('sido', nextSido, { shouldDirty: true, shouldValidate: true })
         setValue('sigungu', nextSigungu, { shouldDirty: true, shouldValidate: true })
+
+        geocoder.addressSearch(nextAddr1, (result, status) => {
+          if (status === kakao.maps.services.Status.OK) {
+            const lat = Number(result[0].y).toFixed(7) // 위도
+            const lng = Number(result[0].x).toFixed(7) // 경도
+            console.log(lat, lng)
+
+            setValue('siteLat', lat, { shouldDirty: true, shouldValidate: false })
+            setValue('siteLng', lng, { shouldDirty: true, shouldValidate: false })
+          }
+        })
 
         // 상세주소 입력 유도
         requestAnimationFrame(() => {
@@ -99,7 +122,9 @@ const ModalEditSite = ({ isOpen, t, onClose, onConfirm, groupId, siteId, siteInf
         siteAddressState: values.sido,
         siteAddressCity: values.sigungu,
         siteAddressOne: values.address1,
-        siteAddressTwo: values.address2
+        siteAddressTwo: values.address2,
+        siteLatitude: values.siteLat,
+        siteLongitude: values.siteLng
       }
 
       if (siteId === 'new') {
@@ -165,6 +190,16 @@ const ModalEditSite = ({ isOpen, t, onClose, onConfirm, groupId, siteId, siteInf
               />
               <Controller
                 name="sigungu"
+                control={control}
+                render={({ field }) => <Input type="text" size="md" readOnly {...field} />}
+              />
+              <Controller
+                name="siteLat"
+                control={control}
+                render={({ field }) => <Input type="text" size="md" readOnly {...field} />}
+              />
+              <Controller
+                name="siteLng"
                 control={control}
                 render={({ field }) => <Input type="text" size="md" readOnly {...field} />}
               />

@@ -64,13 +64,15 @@ const ToggleLabel = styled.label`
     outline: 2px solid var(--color-primary-60);
     outline-offset: 2px;
   }
+
+  ${(props) => props.$disabled && `opacity: 0.5; cursor: not-allowed;`}
 `
 
-const ToggleSwitch = ({ checked, onChange, label, width = '100px' }) => {
+const ToggleSwitch = ({ checked, onChange, label, width = '100px', disabled }) => {
   return (
     <SwitchContainer>
-      <ToggleLabel $checked={checked} $width={width}>
-        <input type="checkbox" checked={checked} onChange={onChange} />
+      <ToggleLabel $checked={checked} $width={width} $disabled={disabled}>
+        <input type="checkbox" checked={checked} onChange={onChange} disabled={disabled} />
         <span className="thumb" />
         {label && <span className="text">{label}</span>}
       </ToggleLabel>
@@ -79,4 +81,3 @@ const ToggleSwitch = ({ checked, onChange, label, width = '100px' }) => {
 }
 
 export default ToggleSwitch
-

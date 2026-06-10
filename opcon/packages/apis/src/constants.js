@@ -1,8 +1,15 @@
 export const API_CONFIG = {
   BASE_URL: import.meta.env.VITE_AUTH_API_BASE_URL,
   PREFIX_AUTH: '/api/v1/auth',
-  PREFIX_OTA: '/v1/ota',
+  PREFIX_OTA: '/v1/ota/web',
+  PREFIX_CMS: '/v1/cms/web',
+  PREFIX_TMS: '/api/v1/web',
   PREFIX_ROBOT: '/api/v1/web',
+  PREFIX_AI_EVENTS: '/events',
+  PREFIX_AI_ANALYSIS: '/analysis',
+  PREFIX_AI_CONFIG: '/config',
+  PREFIX_AI_ACTIONS: '/actions',
+  PREFIX_AI_REPORTS: '/reports',
   TIMEOUT: 10000
 }
 
@@ -21,11 +28,14 @@ export const ENDPOINTS = {
   ROBOT: {
     DEVICES: `${API_CONFIG.PREFIX_ROBOT}/devices`,
     FILES: `${API_CONFIG.PREFIX_ROBOT}/files`,
-    USERS: `${API_CONFIG.PREFIX_ROBOT}/users`
+    USERS: `${API_CONFIG.PREFIX_ROBOT}/users`,
+    GROUPS: `${API_CONFIG.PREFIX_ROBOT}/groups`,
+    SITES: `${API_CONFIG.PREFIX_ROBOT}/sites`
   },
   ORGANIZATION: {
     BASE: `${API_CONFIG.PREFIX_OTA}/organization`,
     TREE: `${API_CONFIG.PREFIX_OTA}/organization/tree`,
+    USER_DETAIL: `${API_CONFIG.PREFIX_OTA}/organization/user/detail`,
     JOIN: `${API_CONFIG.PREFIX_OTA}/organization/join`,
     WITHDRAW: `${API_CONFIG.PREFIX_OTA}/organization/withdraw`,
     APPROVE: `${API_CONFIG.PREFIX_OTA}/organization/approve`,
@@ -36,3 +46,4 @@ export const ENDPOINTS = {
   ARTIFACT: `${API_CONFIG.PREFIX_OTA}/artifact`
 }
 
+export const GETSIZE = '100'

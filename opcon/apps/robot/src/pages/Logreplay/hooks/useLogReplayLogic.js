@@ -50,6 +50,7 @@ export function useLogReplayLogic({ initialDate, deviceId }) {
   const [lidarScans, setLidarScans] = useState([])
   const [dwaGoals, setDwaGoals] = useState([])
   const [t0EpochMs, setT0EpochMs] = useState(null)
+  const [durationMs, setDurationMs] = useState(0) // ✅ ADD
   const [loadPhase, setLoadPhase] = useState('init')
   // 설정 팝오버
   const [showSettings, setShowSettings] = useState(false)
@@ -73,7 +74,8 @@ export function useLogReplayLogic({ initialDate, deviceId }) {
     dwaGoals,
     renderOptions: settingsValue,
     loadPhase,
-    t0EpochMs
+    t0EpochMs,
+    durationMs
   })
   const {
     canvasRef,
@@ -112,7 +114,6 @@ export function useLogReplayLogic({ initialDate, deviceId }) {
     canPlay,
     leftPlayable,
     controlsDisabled,
-    durationMs,
     currentTimestampMs,
     formattedCurrentTime,
     formattedDuration,
@@ -123,6 +124,16 @@ export function useLogReplayLogic({ initialDate, deviceId }) {
     currentTimeSec,
     resetPlaybackRefs
   } = player
+
+  // ✅ ref로 읽어서 함수 참조를 안정화 (무한 렌더 루프 방지)
+  const playTimeSecValRef = useRef(0)
+  useEffect(() => {
+    playTimeSecValRef.current = playTimeSec
+  }, [playTimeSec])
+
+  const getPlayTimeSec = useCallback(() => {
+    return Number(playTimeSecValRef.current) || 0
+  }, []) // ← 빈 deps: 함수 참조 불변
 
   // 데이터/검색/서버/다운로드
   const data = useLogReplayData({
@@ -135,10 +146,13 @@ export function useLogReplayLogic({ initialDate, deviceId }) {
     setDwaGoals,
     setLoadPhase,
     setT0EpochMs,
+    setDurationMs,
     updateBuffer,
     renderNow,
     resetView,
-    deviceId
+    deviceId,
+    // ✅ ADD
+    getPlayTimeSec
   })
 
   const {
@@ -171,7 +185,12 @@ export function useLogReplayLogic({ initialDate, deviceId }) {
     rightOverlayText,
     formatDate,
     handleViewLog,
-    queryWindow
+    queryWindow,
+
+    odomChart1,
+    odomChart2,
+    chartLoading,
+    clearReplaySession
   } = data
   const WINDOW_SEC = 10
   const windowTimerRef = useRef(0)
@@ -194,8 +213,9 @@ export function useLogReplayLogic({ initialDate, deviceId }) {
 
     // ✅ 소스 플래그가 true면 windowQuery를 돌리지 않음(표시/검색 모두 global 소스 사용)
     if (IGNORE_TIMELINE_FOR_LOGS) {
-      setWindowLogLines([])
-      setWindowFilteredLines([])
+      // ✅ 이미 비어있으면 setState 하지 않기 (렌더 루프 방지)
+      setWindowLogLines((prev) => (Array.isArray(prev) && prev.length === 0 ? prev : []))
+      setWindowFilteredLines((prev) => (Array.isArray(prev) && prev.length === 0 ? prev : []))
       return
     }
 
@@ -294,12 +314,15 @@ export function useLogReplayLogic({ initialDate, deviceId }) {
   const uiFilteredLines = IGNORE_TIMELINE_FOR_LOGS ? filteredLines : windowFilteredLines
 
   const resetViews = useCallback(async () => {
-    // 0) 🔒 재생/플레이헤드 ref/state를 "즉시" 0으로 (첫 렌더 안전)
+    console.time('resetViews-total')
+
+    console.time('resetPlaybackRefs')
     try {
       resetPlaybackRefs?.()
     } catch {}
+    console.timeEnd('resetPlaybackRefs')
 
-    // 1) 상태 초기화 (state 쪽도 동일하게 0으로 보장)
+    console.time('setStates')
     setIsPlaying(false)
     setPlayIndex(0)
     setPlayTimeSec(0)
@@ -313,9 +336,16 @@ export function useLogReplayLogic({ initialDate, deviceId }) {
     setPoses3d([])
     setLoadPhase('init')
     setT0EpochMs(null)
+    setDurationMs(0)
+    console.timeEnd('setStates')
+
+    console.time('render')
     updateBuffer(0)
     resetView()
     renderNow()
+    console.timeEnd('render')
+
+    console.timeEnd('resetViews-total')
   }, [
     setIsPlaying,
     setPlayIndex,
@@ -330,6 +360,7 @@ export function useLogReplayLogic({ initialDate, deviceId }) {
     setPoses3d,
     setLoadPhase,
     setT0EpochMs,
+    setDurationMs, // ✅ dep 추가
     updateBuffer,
     resetView,
     renderNow,
@@ -340,7 +371,10 @@ export function useLogReplayLogic({ initialDate, deviceId }) {
     (date) => {
       const isDifferent = date !== selectedDate
       onDateChange(date)
-      if (isDifferent) resetViews()
+      if (isDifferent) {
+        resetViews()
+        clearReplaySession() // ✅ 핵심: 이전 세션 완전 종료
+      }
     },
     [selectedDate, onDateChange, resetViews]
   )
@@ -479,6 +513,10 @@ export function useLogReplayLogic({ initialDate, deviceId }) {
     lidarScans,
     localCostmapFrames,
     dwaGoals,
-    t0EpochMs
+    t0EpochMs,
+
+    odomChart1,
+    odomChart2,
+    chartLoading
   }
 }

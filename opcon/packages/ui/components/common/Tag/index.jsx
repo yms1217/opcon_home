@@ -1,7 +1,7 @@
 import { StyledTag } from './styles'
 
-const Tag = ({ children, theme = 'light' }) => {
-  return <StyledTag $theme={theme}>{children}</StyledTag>
+const Tag = ({ children, name, theme = 'light' }) => {
+  return <StyledTag $theme={theme}>{children || name}</StyledTag>
 }
 
 export default Tag

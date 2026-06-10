@@ -317,7 +317,7 @@ Pre-Training / Post-Training / In-Field / Failure Model 등 학습 목적별로 
 
 ### 탭 3 — Task별 준비 상태
 
-신발 정리, Pick & Place 등 개별 Task별로 현재 보유 Episode 수와 준비 상태를 확인합니다.
+자제 팔레타이징, Pick & Place 등 개별 Task별로 현재 보유 Episode 수와 준비 상태를 확인합니다.
 
 ---
 

@@ -190,9 +190,9 @@ export default function TeleopPage() {
             ) : (
               <Select value={config.task} onChange={(e) => setConfig((c) => ({ ...c, task: e.target.value }))}>
                 <option value="">선택하세요</option>
-                <option value="신발 정리">신발 정리</option>
+                <option value="자제 팔레타이징">자제 팔레타이징</option>
                 <option value="Pick & Place">Pick &amp; Place</option>
-                <option value="수건 접기">수건 접기</option>
+                <option value="재고 검수 분류">재고 검수 분류</option>
                 <option value="제조 PoC">제조 PoC</option>
               </Select>
             )}

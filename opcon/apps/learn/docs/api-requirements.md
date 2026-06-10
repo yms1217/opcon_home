@@ -101,10 +101,10 @@ Content-Type: application/json
 **요청 바디**:
 ```json
 {
-  "name": "신발정리-upload-1749401234567",
+  "name": "자제팔레타이징-upload-1749401234567",
   "source": "upload",
   "dataType": "Teleop dataset",
-  "taskName": "신발 정리",
+  "taskName": "자제 팔레타이징",
   "robotType": "RSP-7",
   "modality": "vision",
   "hasLabel": "yes",
@@ -123,7 +123,7 @@ Content-Type: application/json
 {
   "id": "nas-1749401234567",
   "nasPath": "/datasets/nas-1749401234567",
-  "name": "신발정리-upload-1749401234567",
+  "name": "자제팔레타이징-upload-1749401234567",
   "source": "upload",
   "createdAt": "2026-06-09T10:10:00Z"
 }
@@ -251,7 +251,7 @@ GET /taskflows
 [
   {
     "id": "tf-001",
-    "name": "신발 정리",
+    "name": "자제 팔레타이징",
     "description": "신발 선반 정리 및 배치",
     "stepCount": 5,
     "lastRun": "2026-06-01"
@@ -282,7 +282,7 @@ GET /taskflows/:id
 ```json
 {
   "id": "tf-001",
-  "name": "신발 정리",
+  "name": "자제 팔레타이징",
   "description": "신발 선반 정리 및 배치",
   "stepCount": 5,
   "steps": [
@@ -311,7 +311,7 @@ POST /executions
 ```json
 {
   "taskflowId": "tf-001",
-  "taskflowName": "신발 정리",
+  "taskflowName": "자제 팔레타이징",
   "robotIds": ["robot-001", "robot-002"],
   "repeatCount": 3,
   "purpose": "data-collection",
@@ -333,7 +333,7 @@ POST /executions
 {
   "id": "exec-2026-001",
   "taskflowId": "tf-001",
-  "taskflowName": "신발 정리",
+  "taskflowName": "자제 팔레타이징",
   "status": "running",
   "startedAt": "2026-06-09T10:00:00Z",
   "progress": 0,
@@ -357,7 +357,7 @@ GET /executions/:id
 {
   "id": "exec-2026-001",
   "taskflowId": "tf-001",
-  "taskflowName": "신발 정리",
+  "taskflowName": "자제 팔레타이징",
   "status": "running",
   "startedAt": "2026-06-09T10:00:00Z",
   "completedAt": null,
@@ -545,7 +545,7 @@ POST /teleop-sessions
 **요청 바디**:
 ```json
 {
-  "task": "신발 정리",
+  "task": "자제 팔레타이징",
   "goalEpisodes": 10,
   "robotId": "robot-001",
   "purpose": "Fine-tuning"
@@ -563,7 +563,7 @@ POST /teleop-sessions
 ```json
 {
   "id": "teleop-1749401234567",
-  "task": "신발 정리",
+  "task": "자제 팔레타이징",
   "goalEpisodes": 10,
   "robotId": "robot-001",
   "purpose": "Fine-tuning",
@@ -611,10 +611,10 @@ Content-Type: application/json
 **요청 바디 (파일 업로드 시)**:
 ```json
 {
-  "name": "신발정리-upload-1749401234567",
+  "name": "자제팔레타이징-upload-1749401234567",
   "source": "upload",
   "dataType": "Teleop dataset",
-  "taskName": "신발 정리",
+  "taskName": "자제 팔레타이징",
   "robotType": "RSP-7",
   "modality": "vision",
   "hasLabel": "yes",
@@ -625,11 +625,11 @@ Content-Type: application/json
 **요청 바디 (Learn-by-Watching 시)**:
 ```json
 {
-  "name": "lbw-신발정리-1749401234567",
+  "name": "lbw-자제팔레타이징-1749401234567",
   "source": "lbw",
   "videoType": "ego",
   "purposes": ["pre-training", "motion-extraction"],
-  "taskName": "신발 정리",
+  "taskName": "자제 팔레타이징",
   "videoCount": 5,
   "format": "mp4"
 }
@@ -694,8 +694,8 @@ GET /api/datasets
 ```json
 [
   {
-    "id": "ds-신발정리-v2",
-    "name": "신발정리 v2",
+    "id": "ds-자제팔레타이징-v2",
+    "name": "자제팔레타이징 v2",
     "episodeCount": 180,
     "source": "tms",
     "createdAt": "2026-06-01"
@@ -760,10 +760,10 @@ GET /api/training-jobs
 [
   {
     "id": "job-001",
-    "name": "신발 정리 Fine-tuning",
+    "name": "자제 팔레타이징 Fine-tuning",
     "status": "running",
     "foundationModel": "OpenVLA-OFT",
-    "dataset": "ds-신발정리-v2",
+    "dataset": "ds-자제팔레타이징-v2",
     "startedAt": "2026-06-09T08:00:00Z",
     "completedAt": null,
     "progress": 72
@@ -816,7 +816,7 @@ GET /api/models
 [
   {
     "id": "model-001",
-    "name": "신발정리 Fine-tuned v1",
+    "name": "자제팔레타이징 Fine-tuned v1",
     "baseModel": "OpenVLA-OFT",
     "validationScore": 0.87,
     "status": "review-pending",

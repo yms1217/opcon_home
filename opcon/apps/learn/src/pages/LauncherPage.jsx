@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import styled from 'styled-components'
 import { useNavigate } from 'react-router-dom'
 import SourceCard from '../components/launcher/SourceCard'
@@ -213,6 +213,7 @@ export default function LauncherPage() {
   const navigate = useNavigate()
   const { state, setTask } = useLearning()
   const { stats } = useDataReadiness()
+  const navigatingToChild = useRef(false)
 
   const [phase, setPhase] = useState(state.selectedTask ? 'method' : 'task')
   const [taskflows, setTaskflows] = useState([])
@@ -221,6 +222,9 @@ export default function LauncherPage() {
 
   useEffect(() => {
     getTaskflows().then(setTaskflows)
+    return () => {
+      if (!navigatingToChild.current) setTask(null)
+    }
   }, [])
 
   const handleTaskSelect = (name) => {
@@ -237,6 +241,7 @@ export default function LauncherPage() {
   }
 
   const handleBack = () => {
+    navigatingToChild.current = true
     setPhase('task')
   }
 
@@ -251,7 +256,7 @@ export default function LauncherPage() {
   if (phase === 'task') {
     return (
       <Page>
-        <Title>먼저, 어떤 Task를 학습시키겠습니까?</Title>
+        <Title>Task 선택</Title>
         <Subtitle>학습할 Task를 선택하면 해당 Task에 맞는 데이터 수집 방법을 안내해드립니다</Subtitle>
 
         <SectionTitle>등록된 Task</SectionTitle>
@@ -285,7 +290,7 @@ export default function LauncherPage() {
 
         {nasStats && (
           <>
-            <SectionTitle style={{ marginTop: 20 }}>📊 NAS 데이터 현황</SectionTitle>
+            <SectionTitle style={{ marginTop: 20 }}>NAS 데이터 현황</SectionTitle>
             <SummaryBar>
               {Object.entries(SUMMARY_LABELS).map(([key, label]) => {
                 const s = nasStats[key === 'watch' ? 'lbw' : key]
@@ -315,7 +320,7 @@ export default function LauncherPage() {
         <TaskLabel>{currentTask}</TaskLabel>
       </TaskBreadcrumb>
 
-      <Title>어떤 방식으로 학습 데이터를 만들겠습니까?</Title>
+      <Title>학습 데이터 수집 경로 선택</Title>
       <Subtitle>학습 목적에 맞는 데이터 수집 경로를 선택하세요</Subtitle>
 
       <MethodGrid>
@@ -324,7 +329,7 @@ export default function LauncherPage() {
         ))}
       </MethodGrid>
 
-      <SectionTitle>📊 NAS 데이터 현황</SectionTitle>
+      <SectionTitle>NAS 데이터 현황</SectionTitle>
       <SummaryBar>
         {nasStats ? (
           Object.entries(SUMMARY_LABELS).map(([key, label]) => {

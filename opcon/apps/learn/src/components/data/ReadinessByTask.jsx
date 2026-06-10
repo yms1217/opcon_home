@@ -43,9 +43,9 @@ const statusMap = {
 }
 
 const MOCK_DATA = [
-  { task: '신발 정리', episodes: 320, status: '준비 완료', minRequired: 200 },
+  { task: '자제 팔레타이징', episodes: 320, status: '준비 완료', minRequired: 200 },
   { task: 'Pick & Place', episodes: 1800, status: '준비 완료', minRequired: 500 },
-  { task: '수건 접기', episodes: 45, status: '부족', minRequired: 200 },
+  { task: '재고 검수 분류', episodes: 45, status: '부족', minRequired: 200 },
   { task: '제조 PoC', episodes: 120, status: '진행 중', minRequired: 300 },
 ]
 

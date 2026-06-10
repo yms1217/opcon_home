@@ -775,7 +775,8 @@ export function createCanvasRenderer({
     if (grid && grid.width > 0 && grid.height > 0 && grid.data) {
       const w = grid.width | 0
       const h = grid.height | 0
-      const gridCanvas = getOrBuildGridCanvas(grid)
+      // ✅ ImageBitmap(mcapLoader에서 사전 생성)이 있으면 즉시 사용 → 6s Violation 제거
+      const gridSource = grid.imageBitmap || getOrBuildGridCanvas(grid)
 
       // yaw(라디안/도) 자동 감지
       let yaw = Number(grid.origin?.yaw) || 0
@@ -799,7 +800,7 @@ export function createCanvasRenderer({
       ctx.translate(ox, oy)
       if (yaw !== 0) ctx.rotate(yaw)
       ctx.imageSmoothingEnabled = false
-      ctx.drawImage(gridCanvas, 0, 0, worldW, worldH)
+      ctx.drawImage(gridSource, 0, 0, worldW, worldH)
       ctx.restore()
 
       if (SHOW_AXES) drawGridAxes(ctx, fastWS, ox, oy)
@@ -1129,6 +1130,7 @@ export function createCanvasRenderer({
     if (pts.length >= 2) {
       const viewRect = getWorldViewRect(cssW, cssH, originX, originY, panX, panY, scale)
 
+      // Trajectory = 지나온 경로(초록)
       if (showTrajectory) {
         drawPolylineLOD(ctx, pts, {
           mode: 'past',
@@ -1140,6 +1142,10 @@ export function createCanvasRenderer({
           fastWS,
           worldViewRect: viewRect
         })
+      }
+
+      // Planned Path = 남은 경로(회색) (현재 구현상 future trajectory)
+      if (showPlannedPath) {
         drawPolylineLOD(ctx, pts, {
           mode: 'future',
           color: '#9CA3AF',

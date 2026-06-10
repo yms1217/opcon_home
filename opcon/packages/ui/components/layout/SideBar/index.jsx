@@ -26,13 +26,14 @@ const SideBar = ({ routes, t }) => {
       {depth
         .filter((item) => !item.hide)
         .map(
-          ({ name, path, icon, accessLevel }) =>
+          ({ name, path, icon, accessLevel, hideIcon }) =>
             (accessLevel?.includes(userLevel) || !accessLevel) && (
               <StyledGnbItem key={name}>
                 <GnbButton
                   depthLevel={1}
                   name={t(`SideBar.gnb.${name}`)}
                   icon={icon}
+                  hideIcon={hideIcon}
                   path={path}
                   prefix={prefix}
                   onClick={() => {
@@ -53,8 +54,8 @@ const SideBar = ({ routes, t }) => {
         {gnb
           ?.filter((item) => !item.hide)
           .map(
-            ({ name, icon, path, depth, prefix, accessLevel }) =>
-              icon &&
+            ({ name, icon, path, depth, prefix, accessLevel, hideIcon }) =>
+              (icon || name) &&
               (accessLevel?.includes(userLevel) || !accessLevel) && (
                 <StyledGnbItem key={name}>
                   {depth ? (
@@ -62,6 +63,7 @@ const SideBar = ({ routes, t }) => {
                       <GnbButton
                         as={path ? 'NavLink' : 'button'}
                         icon={icon}
+                        hideIcon={hideIcon}
                         name={t(`SideBar.gnb.${name}`)}
                         prefix={name}
                         path={path}
@@ -83,6 +85,7 @@ const SideBar = ({ routes, t }) => {
                       <GnbButton
                         as={path ? 'NavLink' : 'button'}
                         icon={icon}
+                        hideIcon={hideIcon}
                         name={t(`SideBar.gnb.${name}`)}
                         prefix={prefix}
                         path={path}

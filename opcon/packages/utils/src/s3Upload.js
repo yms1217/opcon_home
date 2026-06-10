@@ -8,9 +8,10 @@ import axios from 'axios'
  * @param {Array<string>} options.presignedUrls Array of presigned URLs for each part.
  * @param {number} options.chunkSize The size of each chunk in bytes.
  * @param {Function} [options.onProgress] Callback function receiving the upload progress percentage (0-100).
+ * @param {AbortSignal} [options.signal] AbortSignal to cancel the upload.
  * @returns {Promise<Array<{ETag: string, PartNumber: number}>>} Resolves with an array of uploaded parts information.
  */
-export const uploadMultipartToS3 = async ({ file, presignedUrls, chunkSize, onProgress }) => {
+export const uploadMultipartToS3 = async ({ file, presignedUrls, chunkSize, onProgress, signal }) => {
   const parts = []
   let uploadedBytes = 0
   const totalBytes = file.size
@@ -29,9 +30,14 @@ export const uploadMultipartToS3 = async ({ file, presignedUrls, chunkSize, onPr
     try {
       // We use a clean axios request here to avoid custom headers.
       response = await axios.put(url, chunk, {
-        headers: { 'Content-Type': file.type }
+        headers: { 'Content-Type': file.type },
+        signal
       })
     } catch (error) {
+      if (axios.isCancel(error)) {
+        console.log('S3 upload part canceled')
+        throw error
+      }
       // axios throws for non-2xx responses or network errors.
       console.error('S3 upload error:', error)
       throw new Error(`Error occurred while uploading part ${i + 1}. Please verify S3 CORS settings.`)
@@ -56,7 +62,7 @@ export const uploadMultipartToS3 = async ({ file, presignedUrls, chunkSize, onPr
   return parts
 }
 
-export const uploadSingleFileToS3 = async ({ file, presignedUrl, onProgress }) => {
+export const uploadSingleFileToS3 = async ({ file, presignedUrl, onProgress, signal }) => {
   let uploadedBytes = 0
   const totalBytes = file.size
 
@@ -68,9 +74,14 @@ export const uploadSingleFileToS3 = async ({ file, presignedUrl, onProgress }) =
   try {
     // We use a clean axios request here to avoid custom headers.
     response = await axios.put(presignedUrl, file, {
-      headers: { 'Content-Type': file.type }
+      headers: { 'Content-Type': file.type },
+      signal
     })
   } catch (error) {
+    if (axios.isCancel(error)) {
+      console.log('S3 single file upload canceled')
+      throw error
+    }
     // axios throws for non-2xx responses or network errors.
     console.error('S3 upload error:', error)
     throw new Error(`Error occurred while uploading file. Please verify S3 CORS settings.`)

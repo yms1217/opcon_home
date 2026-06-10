@@ -10,37 +10,267 @@ import * as lz4ns from 'lz4js' // lz4: browser CJS -> ESM 호환 네임스페이
 const lz4 = lz4ns && lz4ns.default ? lz4ns.default : lz4ns
 const textDecoder = new TextDecoder()
 
-// ===== [REPLACE] 단일 full-scan 멀티 토픽 스캐너 =====
-// 모든 토픽을 1회 readMessages()로 순회하고,
-// topic별 handler로 fan-out 한다.
-export async function scanMcapOnce(url, options = {}) {
-  const {
-    topics, // string[]  - 실제 scan 대상 토픽 목록
-    decompressHandlers,
-    handlers // { [topic]: ({ msg, ch, reader, schemaResolver }) => void | Promise<void> }
-  } = options
+// ===== [Step1] HTTP Range Readable (real impl) =====
+// - BlobReadable과 동일한 시그니처: read(offset: bigint, size: bigint), size(): Promise<bigint>
+//   [1](https://mcap.dev/docs/typescript/classes/_mcap_browser.BlobReadable)
+// - 원격 읽기는 "seek = HTTP range"가 될 수 있으므로, 작은 read 난사 방지를 위해 블록 캐시를 둔다.
+//   [2](https://mcap.dev/spec/notes)
+class HttpRangeReadable {
+  constructor(url, opts = {}) {
+    this.url = url
+    this._knownSize = typeof opts.knownSize === 'bigint' ? opts.knownSize : null
+    this._fetchInit = opts.fetchInit || { mode: 'cors' }
+    this._blockSize = Math.max(64 * 1024, Number(opts.blockSizeBytes || 1024 * 1024)) // default 1MB
+    this._maxBlocks = Math.max(1, Number(opts.maxCachedBlocks || 3)) // small LRU
 
-  const { reader } = await getOrOpenIndexedReaderFromUrl(url, { decompressHandlers })
+    // block cache: key=blockStartBigint.toString() -> Uint8Array
+    this._cache = new Map()
 
-  const channelsById = reader.channelsById || new Map()
-  const schemasById = reader.schemasById || new Map()
-  const schemaResolver = (id) => (id != null ? (schemasById.get(id) ?? null) : null)
+    // ✅ [ADD] MCAP 청크 단위 캐시
+    this._chunkCache = new Map() // key: offsetString → Uint8Array
+    this._chunkCacheBytes = 0
+    this._maxChunkCacheBytes = Math.max(
+      16 * 1024 * 1024,
+      Number(opts.maxChunkCacheBytes || 64 * 1024 * 1024) // 기본 64MB
+    )
+  }
 
-  // topic → handler 매핑 (빠른 분기용)
-  const handlerByTopic = handlers || {}
+  async size() {
+    if (this._knownSize != null) return this._knownSize
 
-  // ✅ 핵심: readMessages 단 1회
-  for await (const msg of reader.readMessages({ topics })) {
-    const ch = channelsById.get(msg.channelId)
-    const topic = ch?.topic
-    if (!topic) continue
+    await this._fetchRange(0n, 0n)
+    if (this._knownSize != null) return this._knownSize
 
-    const fn = handlerByTopic[topic]
-    if (!fn) continue
+    // 최후: 길이 1바이트라도 왔으면 size를 알 수 없으므로 에러
+    throw new Error('[HttpRangeReadable] cannot determine remote file size')
+  }
 
-    // ✅ Promise일 때만 await (매 메시지 await 비용 최소화)
-    const ret = fn({ msg, ch, reader, schemaResolver })
-    if (ret && typeof ret.then === 'function') await ret
+  async read(offset, size) {
+    // BlobReadable과 동일하게 bigint로 받는 전제
+    const off = BigInt(offset)
+    const sz = BigInt(size)
+    if (sz <= 0n) return new Uint8Array(0)
+
+    // ✅ [ADD] 청크 캐시 우선 조회
+    const chunkHit = this._readFromChunkCache(off, sz)
+    if (chunkHit) return chunkHit
+
+    // output 버퍼
+    const outLen = Number(sz)
+    const out = new Uint8Array(outLen)
+
+    const blockSize = BigInt(this._blockSize)
+    let written = 0
+    let cur = off
+    let remain = sz
+
+    while (remain > 0n) {
+      const blockStart = (cur / blockSize) * blockSize
+      const blockEnd = blockStart + blockSize - 1n
+
+      const block = await this._getBlock(blockStart, blockEnd)
+      const inBlockOffset = Number(cur - blockStart)
+      const canTake = Math.min(block.length - inBlockOffset, Number(remain))
+      if (canTake <= 0) break
+
+      out.set(block.subarray(inBlockOffset, inBlockOffset + canTake), written)
+
+      written += canTake
+      cur += BigInt(canTake)
+      remain -= BigInt(canTake)
+    }
+
+    return written === out.length ? out : out.subarray(0, written)
+  }
+
+  async _getBlock(blockStart, blockEnd, { prefetchNext = true } = {}) {
+    const key = blockStart.toString()
+    if (this._cache.has(key)) {
+      const hit = this._cache.get(key)
+      this._cache.delete(key)
+      this._cache.set(key, hit)
+      return hit
+    }
+
+    const buf = await this._fetchRange(blockStart, blockEnd)
+    this._cache.set(key, buf)
+
+    if (prefetchNext) this._prefetchNext(blockStart)
+    this._evict()
+    return buf
+  }
+
+  // ✅ [Step2] 특정 바이트 범위를 블록 캐시에 미리 채워 넣기
+  // - chunk 단위로 계산된 byte range를 미리 가져오면,
+  //   이후 McapIndexedReader가 같은 구간을 read()할 때 네트워크 요청이 크게 줄고 결과가 안정화됨
+  async prefetchByteRange(startByte, endByte) {
+    const s = BigInt(startByte)
+    const e = BigInt(endByte)
+    if (e < s) return
+
+    const blockSize = BigInt(this._blockSize)
+    const firstBlockStart = (s / blockSize) * blockSize
+    const lastBlockStart = (e / blockSize) * blockSize
+
+    // 블록 단위로 순회하며 캐시에 채움
+    for (let bs = firstBlockStart; bs <= lastBlockStart; bs += blockSize) {
+      const be = bs + blockSize - 1n
+      // eslint-disable-next-line no-await-in-loop
+      await this._getBlock(bs, be)
+    }
+  }
+
+  /** 다음 sequential 블록을 fire-and-forget으로 미리 fetch */
+  _prefetchNext(currentBlockStart) {
+    const nextStart = currentBlockStart + BigInt(this._blockSize)
+    if (this._knownSize != null && nextStart >= this._knownSize) return
+    const nextKey = nextStart.toString()
+    if (this._cache.has(nextKey)) return
+    if (!this._inflight) this._inflight = new Set()
+    if (this._inflight.has(nextKey)) return
+    this._inflight.add(nextKey)
+
+    const nextEnd =
+      this._knownSize != null
+        ? nextStart + BigInt(this._blockSize) - 1n < this._knownSize
+          ? nextStart + BigInt(this._blockSize) - 1n
+          : this._knownSize - 1n
+        : nextStart + BigInt(this._blockSize) - 1n
+
+    this._fetchRange(nextStart, nextEnd)
+      .then((buf) => {
+        if (!this._cache.has(nextKey)) {
+          this._cache.set(nextKey, buf)
+          this._evict()
+        }
+      })
+      .catch(() => {})
+      .finally(() => this._inflight?.delete(nextKey))
+  }
+
+  _evict() {
+    while (this._cache.size > this._maxBlocks) {
+      const firstKey = this._cache.keys().next().value
+      this._cache.delete(firstKey)
+    }
+  }
+
+  // ✅ [ADD] 청크 캐시에서 읽기
+  _readFromChunkCache(off, sz) {
+    const end = off + sz
+    for (const [key, buf] of this._chunkCache) {
+      const cOff = BigInt(key)
+      const cEnd = cOff + BigInt(buf.byteLength)
+      if (off >= cOff && end <= cEnd) {
+        const start = Number(off - cOff)
+        return buf.subarray(start, start + Number(sz))
+      }
+    }
+    return null
+  }
+
+  // ✅ [ADD] MCAP 청크 단위 prefetch (인접 청크 자동 병합)
+  async prefetchChunks(chunks) {
+    if (!chunks || !chunks.length) return
+
+    const needed = chunks.filter((c) => !this._chunkCache.has(c.offset.toString()))
+    if (!needed.length) return
+
+    needed.sort((a, b) => Number(a.offset - b.offset))
+
+    // ✅ 인접 청크 병합: gap 64KB 이내 AND 그룹 총 범위 4MB 이하
+    const GAP = 64n * 1024n
+    const MAX_GROUP_BYTES = 4n * 1024n * 1024n
+    const groups = []
+    let cur = {
+      start: needed[0].offset,
+      end: needed[0].offset + needed[0].length,
+      items: [needed[0]]
+    }
+
+    for (let i = 1; i < needed.length; i++) {
+      const c = needed[i]
+      const cEnd = c.offset + c.length
+      const newEnd = cEnd > cur.end ? cEnd : cur.end
+      const rangeSize = newEnd - cur.start
+
+      if (c.offset <= cur.end + GAP && rangeSize <= MAX_GROUP_BYTES) {
+        cur.end = newEnd
+        cur.items.push(c)
+      } else {
+        groups.push(cur)
+        cur = { start: c.offset, end: cEnd, items: [c] }
+      }
+    }
+    groups.push(cur)
+
+    console.log(`[CHUNK PREFETCH] ${needed.length} chunks → ${groups.length} HTTP Range requests`)
+
+    // ✅ 그룹 병렬 fetch (순차 → 병렬)
+    await Promise.all(
+      groups.map(async (g) => {
+        const buf = await this._fetchRange(g.start, g.end - 1n)
+
+        for (const c of g.items) {
+          const key = c.offset.toString()
+          const relStart = Number(c.offset - g.start)
+          const relEnd = relStart + Number(c.length)
+          const slice = buf.slice(relStart, Math.min(relEnd, buf.length))
+          this._chunkCache.set(key, slice)
+          this._chunkCacheBytes += slice.byteLength
+        }
+      })
+    )
+
+    this._evictChunkCache()
+  }
+
+  // ✅ [ADD] 청크 캐시 용량 제한 (FIFO)
+  _evictChunkCache() {
+    while (this._chunkCacheBytes > this._maxChunkCacheBytes && this._chunkCache.size > 0) {
+      const firstKey = this._chunkCache.keys().next().value
+      const buf = this._chunkCache.get(firstKey)
+      this._chunkCacheBytes -= buf?.byteLength || 0
+      this._chunkCache.delete(firstKey)
+    }
+  }
+
+  // ✅ [ADD] 윈도우 전환 시 캐시 클리어
+  clearChunkCache() {
+    this._chunkCache.clear()
+    this._chunkCacheBytes = 0
+  }
+  _parseTotalFromContentRange(h) {
+    // Content-Range: bytes 0-0/12345
+    if (!h) return null
+    const m = String(h).match(/bytes\s+\d+\s*-\s*\d+\s*\/\s*(\d+)/i)
+    if (!m) return null
+    try {
+      const total = BigInt(m[1])
+      return total > 0n ? total : null
+    } catch {
+      return null
+    }
+  }
+
+  async _fetchRange(start, end) {
+    const s = BigInt(start)
+    const e = BigInt(end)
+    const headers = new Headers(this._fetchInit.headers || {})
+    headers.set('Range', `bytes=${s.toString()}-${e.toString()}`)
+
+    const resp = await fetch(this.url, { ...this._fetchInit, method: 'GET', headers })
+    if (!resp.ok) {
+      throw new Error(`[HttpRangeReadable] range fetch failed: HTTP ${resp.status}`)
+    }
+
+    // total size 힌트 확보
+    const cr = resp.headers.get('Content-Range') || resp.headers.get('content-range')
+    const total = this._parseTotalFromContentRange(cr)
+    if (total != null) this._knownSize = total
+
+    const ab = await resp.arrayBuffer()
+    return new Uint8Array(ab)
   }
 }
 
@@ -111,14 +341,20 @@ function _handlersKey(handlers) {
  */
 async function getOrOpenIndexedReaderFromUrl(url, options = {}) {
   const decompressHandlers = await resolveDecompressHandlers(options.decompressHandlers)
-  const key = `${url}::${_handlersKey(decompressHandlers)}`
+  const useHttpRange = !!options.useHttpRange
+  const key = `${url}::${_handlersKey(decompressHandlers)}::${useHttpRange ? 'range' : 'blob'}`
 
   if (!__readerCache.has(key)) {
     const p = (async () => {
-      const blob = await fetchBlob(url)
-      const reader = await openReaderFromBlob(blob, { decompressHandlers })
-      // blob은 reader 내부에서 참조되므로 별도 보관 불필요(메모리 절약)
-      return { reader }
+      if (useHttpRange) {
+        console.log('[MCAP] using HTTP range reader (Step0)')
+        const reader = await openReaderFromUrlRange(url, { decompressHandlers })
+        return { reader }
+      } else {
+        const blob = await fetchBlob(url)
+        const reader = await openReaderFromBlob(blob, { decompressHandlers })
+        return { reader }
+      }
     })()
     __readerCache.set(key, p)
   }
@@ -204,6 +440,53 @@ function normalizeOccupancyGrid(raw) {
   }
 }
 
+// ===== [ADD] OccupancyGrid → ImageBitmap 사전 변환 =====
+// render2d.js의 getOrBuildGridCanvas와 동일한 픽셀 매핑 (Y-flip + 색상)
+// → 렌더러에서 ctx.drawImage(grid.imageBitmap, ...) 1회로 완료
+async function gridToImageBitmap(grid) {
+  if (!grid?.data || !grid.width || !grid.height) return null
+  const w = grid.width | 0
+  const h = grid.height | 0
+
+  let u8 = grid.data
+  if (!(u8 instanceof Uint8Array)) {
+    if (ArrayBuffer.isView(u8)) u8 = new Uint8Array(u8.buffer, u8.byteOffset, u8.byteLength)
+    else if (Array.isArray(u8)) u8 = Uint8Array.from(u8)
+    else return null
+  }
+  if (u8.length < w * h) return null
+
+  const imgData = new ImageData(w, h)
+  const px = imgData.data // Uint8ClampedArray [R,G,B,A, ...]
+
+  // ✅ DATA_TOPLEFT Y-flip: getOrBuildGridCanvas와 동일
+  for (let y = 0; y < h; y++) {
+    const sy = y // source row
+    const dy = h - 1 - y // dest row (Y-flip)
+    for (let x = 0; x < w; x++) {
+      const v = u8[sy * w + x]
+      const di = (dy * w + x) << 2
+
+      if (v === 255) {
+        // unknown → gray, transparent (기존 동일)
+        px[di] = 0x80
+        px[di + 1] = 0x80
+        px[di + 2] = 0x80
+        px[di + 3] = 0
+      } else {
+        // 0~100 → grayscale (기존 동일)
+        const t = Math.max(0, Math.min(100, v)) / 100
+        const c = Math.round(255 * (1 - t))
+        px[di] = c
+        px[di + 1] = c
+        px[di + 2] = c
+        px[di + 3] = 255
+      }
+    }
+  }
+
+  return createImageBitmap(imgData)
+}
 // 기대 토픽 후보(소문자) 중 하나로 끝나거나 포함되는 채널을 찾는다.
 function findTopicByCandidates(reader, candidatesLower) {
   const topics = listAllChannels(reader).map((c) => c.topic)
@@ -310,10 +593,194 @@ async function openReaderFromBlob(blob, opts = {}) {
   }
 }
 
+// ===== [ADD][Step0] URL 기반 (Range) Reader =====
+async function openReaderFromUrlRange(url, opts = {}) {
+  const decompressHandlers = await resolveDecompressHandlers(opts.decompressHandlers)
+  console.log('[MCAP] openReaderFromUrlRange')
+
+  const readable = new HttpRangeReadable(url, {
+    // ✅ RTT/요청 수 줄이기: 기본 8MB, 캐시 8~16블록 권장
+    blockSizeBytes: opts.blockSizeBytes || 8 * 1024 * 1024,
+    maxCachedBlocks: opts.maxCachedBlocks || 12
+  })
+
+  const reader = await McapIndexedReader.Initialize({ readable, decompressHandlers })
+
+  // ✅ [Step2] loader에서 chunk 기반 prefetch를 호출할 수 있게 연결
+  reader.__httpReadable = readable
+
+  return reader
+}
+
 function nsToSec(ns) {
   if (typeof ns === 'bigint') return Number(ns) / 1e9
   if (typeof ns === 'number') return ns / 1e9
   return 0
+}
+// ============================================================
+// [ADD] Common helpers for windowed + HTTP range loading
+// - pose / rosout / costmap / path / goal_pose 로더에서 재사용
+// ============================================================
+function _secToNsBigInt(sec) {
+  return BigInt(Math.floor(Number(sec) * 1e9))
+}
+
+/**
+ * reader.statistics.messageStartTime(=baseNs) 기준으로
+ * startSec/endSec(플레이바 상대초) → readMessages(startTime/endTime) 생성
+ * 반환 객체에 __baseSec도 함께 넣어 tSec 계산에 재사용
+ */
+function buildWindowReadArgs(reader, { topics, startSec = null, endSec = null } = {}) {
+  const baseNs = reader?.statistics?.messageStartTime ?? undefined
+  const baseSec = baseNs != null ? nsToSec(baseNs) : 0
+  const isWindow = startSec != null && endSec != null
+
+  return {
+    topics,
+    startTime: isWindow && baseNs != null ? baseNs + _secToNsBigInt(startSec) : undefined,
+    endTime: isWindow && baseNs != null ? baseNs + _secToNsBigInt(endSec) : undefined,
+    __baseNs: baseNs,
+    __baseSec: baseSec
+  }
+}
+
+/**
+ * chunkIndexes 기반 prefetch (있으면 Range 요청 안정화/감소)
+ * 실패해도 기능은 진행하도록 try/catch로 흡수
+ */
+async function prefetchForWindow(reader, readArgs, { padChunks = 1 } = {}) {
+  try {
+    const pStart = readArgs?.startTime ?? reader?.statistics?.messageStartTime
+    const pEnd = readArgs?.endTime ?? reader?.statistics?.messageEndTime
+    if (pStart != null && pEnd != null) {
+      await prefetchChunksForTimeWindow(reader, pStart, pEnd, { padChunks })
+    }
+  } catch (e) {
+    console.warn('[PREFETCH] skipped/failed:', e?.message || e)
+  }
+}
+// ✅ [Step2] chunk index 객체에서 필드명을 안전하게 뽑기(라이브러리/버전 차이 대응)
+function _pickChunkField(ci, names) {
+  for (const k of names) {
+    if (ci && ci[k] != null) return ci[k]
+  }
+  return null
+}
+
+function _toBigIntMaybe(v) {
+  if (typeof v === 'bigint') return v
+  if (typeof v === 'number' && Number.isFinite(v)) return BigInt(Math.floor(v))
+  try {
+    // 문자열 숫자도 일부 케이스에서 올 수 있어 방어
+    if (typeof v === 'string' && v) return BigInt(v)
+  } catch {}
+  return null
+}
+
+// ✅ [Step2] startTimeNs~endTimeNs(=logTime 기준) 범위에 겹치는 chunk들의 파일 byte range 계산
+function getChunkByteRangeForTimeWindow(reader, startTimeNs, endTimeNs, { padChunks = 1 } = {}) {
+  const cis = Array.isArray(reader?.chunkIndexes) ? reader.chunkIndexes : []
+  if (!cis.length) return null
+
+  const s = _toBigIntMaybe(startTimeNs)
+  const e = _toBigIntMaybe(endTimeNs)
+  if (s == null || e == null) return null
+
+  let firstIdx = null
+  let lastIdx = null
+
+  for (let i = 0; i < cis.length; i++) {
+    const ci = cis[i]
+    const cs = _toBigIntMaybe(_pickChunkField(ci, ['messageStartTime', 'message_start_time']))
+    const ce = _toBigIntMaybe(_pickChunkField(ci, ['messageEndTime', 'message_end_time']))
+    if (cs == null || ce == null) continue
+
+    // overlap: [cs,ce] intersects [s,e]
+    if (ce < s || cs > e) continue
+
+    if (firstIdx == null) firstIdx = i
+    lastIdx = i
+  }
+
+  if (firstIdx == null) return null
+
+  // ✅ 여유 chunk 포함(스크럽 직후/경계 흔들림 완충)
+  const lo = Math.max(0, firstIdx - (padChunks | 0))
+  const hi = Math.min(cis.length - 1, lastIdx + (padChunks | 0))
+
+  let minOff = null
+  let maxEnd = null
+  for (let i = lo; i <= hi; i++) {
+    const ci = cis[i]
+    const off = _toBigIntMaybe(
+      _pickChunkField(ci, ['chunkStartOffset', 'chunk_start_offset', 'chunkOffset', 'chunk_offset', 'offset'])
+    )
+    const len = _toBigIntMaybe(_pickChunkField(ci, ['chunkLength', 'chunk_length', 'length']))
+    if (off == null || len == null || len <= 0n) continue
+
+    const end = off + len - 1n
+    minOff = minOff == null ? off : off < minOff ? off : minOff
+    maxEnd = maxEnd == null ? end : end > maxEnd ? end : maxEnd
+  }
+
+  if (minOff == null || maxEnd == null || maxEnd < minOff) return null
+  return { startByte: minOff, endByte: maxEnd, lo, hi }
+}
+
+// ✅ [ADD] 시간 윈도우에 해당하는 개별 청크 목록 반환
+function getChunksForTimeWindow(reader, startTimeNs, endTimeNs, { padChunks = 1 } = {}) {
+  const cis = Array.isArray(reader?.chunkIndexes) ? reader.chunkIndexes : []
+  if (!cis.length) return []
+
+  const s = _toBigIntMaybe(startTimeNs)
+  const e = _toBigIntMaybe(endTimeNs)
+  if (s == null || e == null) return []
+
+  let firstIdx = null
+  let lastIdx = null
+
+  for (let i = 0; i < cis.length; i++) {
+    const ci = cis[i]
+    const cs = _toBigIntMaybe(_pickChunkField(ci, ['messageStartTime', 'message_start_time']))
+    const ce = _toBigIntMaybe(_pickChunkField(ci, ['messageEndTime', 'message_end_time']))
+    if (cs == null || ce == null) continue
+    if (ce < s || cs > e) continue
+    if (firstIdx == null) firstIdx = i
+    lastIdx = i
+  }
+
+  if (firstIdx == null) return []
+
+  const lo = Math.max(0, firstIdx - (padChunks | 0))
+  const hi = Math.min(cis.length - 1, lastIdx + (padChunks | 0))
+
+  const chunks = []
+  for (let i = lo; i <= hi; i++) {
+    const ci = cis[i]
+    const off = _toBigIntMaybe(
+      _pickChunkField(ci, ['chunkStartOffset', 'chunk_start_offset', 'chunkOffset', 'chunk_offset', 'offset'])
+    )
+    const len = _toBigIntMaybe(_pickChunkField(ci, ['chunkLength', 'chunk_length', 'length']))
+    if (off == null || len == null || len <= 0n) continue
+    chunks.push({ offset: off, length: len })
+  }
+
+  return chunks
+}
+
+// ── prefetchChunksForTimeWindow 전체 교체 ──
+async function prefetchChunksForTimeWindow(reader, startTimeNs, endTimeNs, { padChunks = 1 } = {}) {
+  const http = reader?.__httpReadable
+  if (!http || typeof http.prefetchChunks !== 'function') return null
+
+  const chunks = getChunksForTimeWindow(reader, startTimeNs, endTimeNs, { padChunks })
+  if (!chunks.length) return null
+
+  await http.prefetchChunks(chunks)
+
+  const totalBytes = chunks.reduce((sum, c) => sum + Number(c.length), 0)
+  console.log('[CHUNK PREFETCH] done', { count: chunks.length, totalBytes })
+  return { count: chunks.length, chunks, totalBytes }
 }
 
 function quatToYaw(q) {
@@ -425,105 +892,412 @@ function normalizeLevelText(v) {
   if (n === 50 || n === 16) return 'FATAL'
   return 'INFO'
 }
-
-/** /rosout -> 문자열 라인 배열 */
-export async function loadLogsFromMcapUrl(url, options = {}) {
+// ============================================================
+// [ADD] Costmap window loader (local/global 공용)
+// - 기존 토픽 + 샘플 토픽 모두 후보로 커버
+// - 반환: { found, frames:[{tSec, grid}], topic }
+// ============================================================
+export async function loadCostmapWindowFromMcapUrl(url, options = {}) {
   const {
-    logTopic = '/rosout',
-    maxLines = 20000,
+    topic = '/local_costmap/costmap',
     decompressHandlers,
-    onBatch, // 실시간 로그 스트리밍 콜백
-    batchSize = 50, // 몇 줄마다 UI에 반영할지
-    VERBOSE = false
+    startSec = null,
+    endSec = null,
+    // costmap은 무거우므로 기본 희소화 권장
+    timeDownsampleMs = 250,
+    maxFrames = 2000,
+    onBatch,
+    batchSize = 1
   } = options
 
-  if (VERBOSE) console.log('loadLogsFromMcapUrl start : ', { url, logTopic, maxLines })
+  const { reader } = await getOrOpenIndexedReaderFromUrl(url, {
+    decompressHandlers,
+    useHttpRange: true
+  })
 
-  const out = []
-  let reader = null
-  let hasTopic = false
-  let cnt = 0
+  // ✅ 기존 + 샘플 후보 모두 포함
+  const candidates = [
+    String(topic).toLowerCase(),
+
+    // 샘플(표준)
+    '/local_costmap/costmap',
+    '/global_costmap/costmap',
+
+    // 기존(디버그/변형)
+    '/debug/dwa_local_costmap',
+    '/debug/dwa_global_costmap',
+
+    // 느슨한 호환
+    '/local_costmap',
+    '/global_costmap',
+    '/costmap'
+  ]
+
+  const chosen = findTopicByCandidates(reader, candidates)
+  if (!chosen) return { found: false, frames: [], topic: null }
+
+  const channelsById = reader.channelsById || new Map()
+  const schemasById = reader.schemasById || new Map()
+  const schemaResolver = (id) => (id != null ? (schemasById.get(id) ?? null) : null)
+
+  // schema decoder (optional)
+  let decoder = null
+  try {
+    const ch = [...channelsById.values()].find((c) => c.topic === chosen)
+    const sch = ch?.schemaId != null ? schemasById.get(ch.schemaId) : null
+    if (sch) decoder = await buildDecoderForSchema(sch)
+  } catch {}
+
+  const readArgs = buildWindowReadArgs(reader, { topics: [chosen], startSec, endSec })
+  await prefetchForWindow(reader, readArgs, { padChunks: 1 })
+
+  const baseSec = readArgs.__baseSec ?? 0
+  let lastKept = -Infinity
+  const frames = []
+  let batch = []
 
   try {
-    // 1) 캐시된 reader 사용
-    ;({ reader } = await getOrOpenIndexedReaderFromUrl(url, { decompressHandlers }))
-    if (VERBOSE)
-      console.log('reader opened', {
-        channels: reader?.channelsById?.size,
-        schemas: reader?.schemasById?.size
-      })
+    for await (const msg of reader.readMessages(readArgs)) {
+      const timeNs = msg.logTime ?? msg.publishTime
+      if (timeNs == null) continue
 
-    // 3) topic 존재 검사
-    const channelsById = reader?.channelsById || new Map()
-    for (const [, ch] of channelsById) {
-      if (ch?.topic === logTopic) {
-        hasTopic = true
-        break
+      // ✅ 플레이바 상대초
+      const tSec = nsToSec(timeNs) - baseSec
+      if (!Number.isFinite(tSec)) continue
+
+      // ✅ 희소화
+      if (timeDownsampleMs > 0 && Number.isFinite(lastKept) && (tSec - lastKept) * 1000 < timeDownsampleMs) {
+        continue
       }
-    }
-    if (!hasTopic) {
-      console.warn(`log topic("${logTopic}") not found`)
-      return out
-    }
+      lastKept = tSec
 
-    // 4) 스키마 리졸버
-    const schemasById =
-      reader.schemasById && typeof reader.schemasById.get === 'function' ? reader.schemasById : new Map()
+      const ch = channelsById.get(msg.channelId)
+      const obj = await decodeMsgToObject(msg, ch, schemaResolver, { decoder, tryUtf8Json: true })
+      const grid = normalizeOccupancyGrid(obj)
+      if (!grid) continue
 
-    const schemaResolver = (id) => (id != null ? (schemasById.get(id) ?? null) : null)
+      const rec = { tSec, grid }
+      frames.push(rec)
+      batch.push(rec)
 
-    // ⭐ batch buffer (실시간 전달용)
-    let batchBuffer = []
-
-    // 5) 메시지 순회
-    console.log('start readMessages')
-
-    for await (const msg of reader.readMessages({ topics: [logTopic] })) {
-      const tsStr = formatLocal(nsToSec(msg.logTime ?? msg.publishTime))
-      const ch = (reader.channelsById || new Map()).get(msg.channelId)
-
-      let line = null
-      try {
-        const pretty = await tryDecodePayload(msg.data, ch, schemaResolver)
-        if (pretty) line = pretty
-      } catch (e) {
-        console.warn('[mcapLoader] tryDecodePayload failed:', e)
+      if (onBatch && batch.length >= batchSize) {
+        onBatch(batch)
+        batch = []
+        await Promise.resolve()
       }
 
-      if (!line) {
-        const node = ch?.topic ?? logTopic
-        const size = msg.data?.byteLength ?? 0
-        line = `[INFO] ${tsStr} ${node}: (payload ${size} bytes)`
-      }
-
-      // 전체 저장
-      out.push(line)
-
-      // ⭐ 배치 버퍼에 저장
-      if (onBatch) {
-        batchBuffer.push(line)
-        if (batchBuffer.length >= batchSize) {
-          onBatch(batchBuffer) // UI로 즉시 전달
-          batchBuffer = []
-        }
-      }
-
-      cnt++
-      if (cnt >= maxLines) break
+      if (frames.length >= maxFrames) break
+      if ((frames.length & 0x3f) === 0) await Promise.resolve()
     }
-
-    // 남은 배치 플러시
-    if (onBatch && batchBuffer.length > 0) {
-      onBatch(batchBuffer)
-    }
-
-    console.log('finished readMessages', { lines: out.length })
   } catch (e) {
-    console.error('loadLogsFromMcapUrl failed', e)
-  } finally {
-    console.log('finalize loadLogsFromMcapUrl, out.length =', out.length)
+    console.warn('[COSTMAP][WINDOW] readMessages failed:', e)
   }
 
+  if (onBatch && batch.length) onBatch(batch)
+
+  // 정렬 + dedupe
+  frames.sort((a, b) => a.tSec - b.tSec)
+  for (let i = frames.length - 2; i >= 0; i--) {
+    if (frames[i].tSec === frames[i + 1].tSec) frames.splice(i, 1)
+  }
+
+  return { found: frames.length > 0, frames, topic: chosen }
+}
+// ============================================================
+// [ADD] Path window loader (plan/transformed_global_plan + legacy)
+// - 반환: { found, plans:[{tSec, points:[{x,y,z}]}], topic }
+// ============================================================
+export async function loadPathWindowFromMcapUrl(url, options = {}) {
+  const {
+    topic = '/plan',
+    decompressHandlers,
+    startSec = null,
+    endSec = null,
+    // transformed_global_plan이 빈번할 수 있어 기본 희소화
+    timeDownsampleMs = 200,
+    maxMsgs = 800
+  } = options
+
+  const { reader } = await getOrOpenIndexedReaderFromUrl(url, {
+    decompressHandlers,
+    useHttpRange: true
+  })
+
+  // ✅ 기존 + 샘플 후보 모두 포함
+  const topicLC = String(topic)
+  const candidates = [
+    topicLC,
+    topicLC.toLowerCase(),
+
+    // 샘플
+    '/plan',
+    '/transformed_global_plan',
+
+    // 기존/확장 후보들
+    '/master_service/path',
+    '/path',
+    '/trajectory',
+    '/planned_path',
+    '/plan_smoothed',
+    '/transformed_global_plan', // 중복 괜찮음
+    '/transformedGlobalPlan' // 혹시 Camel 변형 있을까봐(희박)
+  ]
+
+  const chosen = findTopicByCandidates(reader, candidates)
+  if (!chosen) return { found: false, plans: [], topic: null }
+
+  const channelsById = reader.channelsById || new Map()
+  const schemasById = reader.schemasById || new Map()
+  const schemaResolver = (id) => (id != null ? (schemasById.get(id) ?? null) : null)
+
+  const readArgs = buildWindowReadArgs(reader, { topics: [chosen], startSec, endSec })
+  await prefetchForWindow(reader, readArgs, { padChunks: 1 })
+
+  const baseSec = readArgs.__baseSec ?? 0
+  let lastKept = -Infinity
+  const plans = []
+  let n = 0
+
+  try {
+    for await (const msg of reader.readMessages(readArgs)) {
+      const timeNs = msg.logTime ?? msg.publishTime
+      if (timeNs == null) continue
+
+      const tSec = nsToSec(timeNs) - baseSec
+      if (!Number.isFinite(tSec)) continue
+
+      // ✅ 희소화
+      if (timeDownsampleMs > 0 && Number.isFinite(lastKept) && (tSec - lastKept) * 1000 < timeDownsampleMs) {
+        continue
+      }
+      lastKept = tSec
+
+      const ch = channelsById.get(msg.channelId)
+      const obj = await decodeMsgToObject(msg, ch, schemaResolver, { tryUtf8Json: true })
+      if (!obj) continue
+
+      // nav_msgs/Path: poses[].pose.position
+      const poses = obj?.poses
+      if (!Array.isArray(poses) || poses.length === 0) continue
+
+      const points = []
+      for (const it of poses) {
+        const pos = it?.pose?.position ?? it?.pose?.pose?.position // 혹시 변형 대비
+        if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.y)) {
+          points.push({ x: +pos.x, y: +pos.y, z: Number(pos.z) || 0 })
+        }
+      }
+      if (!points.length) continue
+
+      plans.push({ tSec, points })
+
+      if (++n >= maxMsgs) break
+      if ((n & 0x7f) === 0) await Promise.resolve()
+    }
+  } catch (e) {
+    console.warn('[PATH][WINDOW] readMessages failed:', e)
+  }
+
+  plans.sort((a, b) => a.tSec - b.tSec)
+  for (let i = plans.length - 2; i >= 0; i--) {
+    if (plans[i].tSec === plans[i + 1].tSec) plans.splice(i, 1)
+  }
+
+  return { found: plans.length > 0, plans, topic: chosen }
+}
+// ============================================================
+// [ADD] Goal pose window loader (PoseStamped 계열)
+// - 기존 토픽 + 샘플 토픽 모두 후보로 커버
+// - 반환: { found, goals:[{tSec,x,y,z,yaw}], topic }
+// ============================================================
+export async function loadGoalPoseWindowFromMcapUrl(url, options = {}) {
+  const { topic = '/goal_pose', decompressHandlers, startSec = null, endSec = null, maxGoals = 800 } = options
+
+  const { reader } = await getOrOpenIndexedReaderFromUrl(url, {
+    decompressHandlers,
+    useHttpRange: true
+  })
+
+  const candidates = [
+    String(topic).toLowerCase(),
+
+    // 샘플/표준
+    '/goal_pose',
+    '/move_base_simple/goal',
+
+    // 기존/확장
+    '/debug/dwa_goal',
+    '/dwa_goal',
+    '/goal'
+  ]
+
+  const chosen = findTopicByCandidates(reader, candidates)
+  if (!chosen) return { found: false, goals: [], topic: null }
+
+  const channelsById = reader.channelsById || new Map()
+  const schemasById = reader.schemasById || new Map()
+  const schemaResolver = (id) => (id != null ? (schemasById.get(id) ?? null) : null)
+
+  // schema decoder (optional)
+  let decoder = null
+  try {
+    const ch = [...channelsById.values()].find((c) => c.topic === chosen)
+    const sch = ch?.schemaId != null ? schemasById.get(ch.schemaId) : null
+    if (sch) decoder = await buildDecoderForSchema(sch)
+  } catch {}
+
+  const readArgs = buildWindowReadArgs(reader, { topics: [chosen], startSec, endSec })
+  await prefetchForWindow(reader, readArgs, { padChunks: 1 })
+
+  const baseSec = readArgs.__baseSec ?? 0
+  const goals = []
+
+  try {
+    for await (const msg of reader.readMessages(readArgs)) {
+      const timeNs = msg.logTime ?? msg.publishTime
+      if (timeNs == null) continue
+
+      const tSec = nsToSec(timeNs) - baseSec
+      if (!Number.isFinite(tSec)) continue
+
+      const ch = channelsById.get(msg.channelId)
+      const obj = await decodeMsgToObject(msg, ch, schemaResolver, { decoder, tryUtf8Json: true })
+      const pose = pickPoseAny(obj) // ✅ 이미 파일에 존재하는 범용 pose 추출기 재사용
+      if (!pose) continue
+
+      goals.push({ tSec, x: pose.x, y: pose.y, z: Number(pose.z) || 0, yaw: Number(pose.yaw) || 0 })
+
+      if (goals.length >= maxGoals) break
+      if ((goals.length & 0x7f) === 0) await Promise.resolve()
+    }
+  } catch (e) {
+    console.warn('[GOAL][WINDOW] readMessages failed:', e)
+  }
+
+  goals.sort((a, b) => a.tSec - b.tSec)
+  for (let i = goals.length - 2; i >= 0; i--) {
+    if (goals[i].tSec === goals[i + 1].tSec) goals.splice(i, 1)
+  }
+
+  return { found: goals.length > 0, goals, topic: chosen }
+}
+// ============================================================
+// [ADD] Sparse pose loader — Foxglove 스타일 차트 Overview
+// chunk index에서 균등 간격으로 N개만 선택 → 각 chunk에서 1개 pose만 추출
+// 전체 chunk 해제 대신 ~100개만 해제 → 20초 → ~2초
+// ============================================================
+export async function loadPosesSparseFromMcapUrl(url, options = {}) {
+  const {
+    poseTopic = '/carto_service/trackedpose',
+    decompressHandlers,
+    numSamples = 100,
+    onBatch = null,
+    batchSize = 30
+  } = options
+
+  const { reader } = await getOrOpenIndexedReaderFromUrl(url, {
+    decompressHandlers,
+    useHttpRange: true
+  })
+
+  const candidates = [
+    String(poseTopic).toLowerCase(),
+    '/aslam_pose',
+    '/carto_service/trackedpose',
+    '/odom',
+    '/lio_odom'
+  ]
+  const chosen = findTopicByCandidates(reader, candidates)
+  if (!chosen) return []
+
+  const channelsById = reader.channelsById || new Map()
+  const schemasById = reader.schemasById || new Map()
+  const schemaResolver = (id) => (id != null ? (schemasById.get(id) ?? null) : null)
+
+  let decoder = null
+  try {
+    const ch = [...channelsById.values()].find((c) => c.topic === chosen)
+    const sch = ch?.schemaId != null ? schemasById.get(ch.schemaId) : null
+    if (sch) decoder = await buildDecoderForSchema(sch)
+  } catch {}
+
+  // ── 1) chunk index에서 균등 선택 ──
+  const cis = Array.isArray(reader.chunkIndexes) ? reader.chunkIndexes : []
+  if (!cis.length) return []
+
+  const baseNs = reader.statistics?.messageStartTime
+  if (baseNs == null) return []
+  const baseSec = nsToSec(baseNs)
+
+  const stride = Math.max(1, Math.floor(cis.length / numSamples))
+  const selected = []
+  for (let i = 0; i < cis.length; i += stride) {
+    selected.push(cis[i])
+  }
+  // 마지막 chunk도 포함
+  if (selected[selected.length - 1] !== cis[cis.length - 1]) {
+    selected.push(cis[cis.length - 1])
+  }
+
+  console.log(`[SPARSE] ${cis.length} chunks → ${selected.length} sampled (stride=${stride})`)
+
+  // ── 2) 선택된 chunk만 batch prefetch ──
+  const http = reader.__httpReadable
+  if (http?.prefetchChunks) {
+    const prefetchList = selected
+      .map((ci) => {
+        const off = _toBigIntMaybe(
+          _pickChunkField(ci, ['chunkStartOffset', 'chunk_start_offset', 'chunkOffset', 'chunk_offset', 'offset'])
+        )
+        const len = _toBigIntMaybe(_pickChunkField(ci, ['chunkLength', 'chunk_length', 'length']))
+        return off != null && len != null ? { offset: off, length: len } : null
+      })
+      .filter(Boolean)
+
+    if (prefetchList.length) {
+      await http.prefetchChunks(prefetchList)
+    }
+  }
+
+  // ── 3) 각 chunk에서 1개 pose만 추출 ──
+  const out = []
+  for (let i = 0; i < selected.length; i++) {
+    const ci = selected[i]
+    const startNs = _toBigIntMaybe(_pickChunkField(ci, ['messageStartTime', 'message_start_time']))
+    const endNs = _toBigIntMaybe(_pickChunkField(ci, ['messageEndTime', 'message_end_time']))
+    if (startNs == null || endNs == null) continue
+
+    try {
+      for await (const msg of reader.readMessages({
+        topics: [chosen],
+        startTime: startNs,
+        endTime: endNs
+      })) {
+        const timeNs = msg.logTime ?? msg.publishTime
+        if (timeNs == null) continue
+        const tSec = nsToSec(timeNs) - baseSec
+
+        const ch = channelsById.get(msg.channelId)
+        const obj = await decodeMsgToObject(msg, ch, schemaResolver, { decoder })
+        const pose = pickPoseAny(obj)
+        if (pose) {
+          out.push({ tSec, x: pose.x, y: pose.y, z: Number(pose.z) || 0, yaw: Number(pose.yaw) || 0 })
+          break // ✅ 1개만 추출 후 다음 chunk로
+        }
+      }
+    } catch {}
+
+    // progressive 콜백
+    if (onBatch && out.length > 0 && out.length % batchSize === 0) {
+      onBatch(out.slice())
+      await Promise.resolve()
+    }
+  }
+
+  out.sort((a, b) => a.tSec - b.tSec)
+  if (onBatch) onBatch(out)
+
+  console.log(`[SPARSE] done: ${out.length} poses from ${selected.length} chunks`)
   return out
 }
 
@@ -532,25 +1306,35 @@ export async function loadPosesFromMcapUrl(url, options = {}) {
   const {
     poseTopic = '/carto_service/trackedpose',
     decompressHandlers,
-    // 빠른 미리보기(프리뷰) 기본값 - 필요시 옵션으로 조정
-    previewLimit = 2000, // 프리뷰로 최대 N개까지만 빠르게 확보
-    downsample = 5, // 메시지 밀집시 N개 중 1개만 채택
-    maxMillis = 1500, // 프리뷰 시간 상한(ms)
-    fullScan = false, // true면 끝까지(배치 yield 포함) 전부 읽음
-    onBatch, // (arr) => void  - 읽히는 대로 UI에 추가 그리기
-    batchSize = 400, // onBatch 묶음 크기
+    // ✅ Foxglove-style window
+    startSec = null, // number | null
+    endSec = null, // number | nu
     timeDownsampleMs = null // t 간격 다운샘플(예: 80ms). null이면 비활성
   } = options
 
+  const isWindow = startSec != null && endSec != null
+  const effTimeDownsampleMs = timeDownsampleMs ?? (isWindow ? 20 : 200)
+
+  console.log('[POSE][INIT]', {
+    poseTopic,
+    startSec,
+    endSec,
+    isWindow,
+    effTimeDownsampleMs
+  })
+
   // 캐시된 reader 사용 (여기서부터 2차,3차 호출도 '바로' 시작)
-  const { reader } = await getOrOpenIndexedReaderFromUrl(url, { decompressHandlers })
+  const { reader } = await getOrOpenIndexedReaderFromUrl(url, {
+    decompressHandlers,
+    useHttpRange: true
+  })
 
   const candidates = [
     String(poseTopic).toLowerCase(),
-    '/odom',
-    '/lio_odom',
     '/aslam_pose',
-    '/carto_service/trackedpose'
+    '/carto_service/trackedpose',
+    '/odom',
+    '/lio_odom'
   ]
   const chosen = findTopicByCandidates(reader, candidates)
   if (!chosen) {
@@ -563,316 +1347,111 @@ export async function loadPosesFromMcapUrl(url, options = {}) {
   const schemasById = reader.schemasById || new Map()
   const schemaResolver = (id) => (id != null ? (schemasById.get(id) ?? null) : null)
 
+  // ✅ [ADD] schema decoder 사전 빌드 (매 메시지 fallback 제거)
+  let poseDecoder = null
+  try {
+    const ch = [...channelsById.values()].find((c) => c.topic === chosen)
+    const sch = ch?.schemaId != null ? schemasById.get(ch.schemaId) : null
+    if (sch) poseDecoder = await buildDecoderForSchema(sch)
+  } catch {
+    /* fallback to generic */
+  }
+
   const out = []
   let lastTs = -Infinity
-  let batch = []
 
   const pickXYYawDeep = pickPoseAny
 
   let total = 0,
     accepted = 0
   const startMs = performance.now()
-  let idx = 0
 
   try {
-    for await (const msg of reader.readMessages({ topics: [chosen] })) {
+    const secToNs = (s) => BigInt(Math.floor(Number(s) * 1e9))
+
+    // ✅ MCAP epoch 기준 시작점
+    const baseNs = reader.statistics?.messageStartTime ?? undefined
+    const baseSec = baseNs != null ? nsToSec(baseNs) : 0
+
+    const readArgs = {
+      topics: [chosen],
+
+      startTime: baseNs != null && startSec != null ? baseNs + secToNs(startSec) : undefined,
+      endTime: baseNs != null && endSec != null ? baseNs + secToNs(endSec) : undefined
+    }
+
+    console.log('[POSE][READ ARGS]', {
+      ...readArgs,
+      baseSec: baseNs ? nsToSec(baseNs) : null
+    })
+
+    // ✅ [Step2] chunkIndexes 기반으로 해당 시간 구간 chunk들을 먼저 가져와 캐시에 적재
+    // - 같은 시간대 클릭 시 결과가 매번 달라지는 현상(부분 chunk read/경계) 완화 + Range 폭발 감소
+    if (readArgs.startTime != null && readArgs.endTime != null) {
+      try {
+        const pr = await prefetchChunksForTimeWindow(reader, readArgs.startTime, readArgs.endTime, { padChunks: 1 })
+
+        if (pr) {
+          console.log('[POSE][PREFETCH]', {
+            chunkCount: pr.count,
+            totalBytes: pr.totalBytes
+          })
+        }
+      } catch (e) {
+        console.warn('[POSE][PREFETCH] failed:', e?.message || e)
+      }
+    }
+
+    for await (const msg of reader.readMessages(readArgs)) {
       total++
 
-      // (1) 다운샘플(개수 기준)
-      if (downsample > 1 && idx++ % downsample !== 0) {
-        // 프리뷰 시간 상한만 확인
-      } else {
-        const tSec = nsToSec(msg.logTime ?? msg.publishTime)
+      const timeNs = msg.logTime != null ? msg.logTime : msg.publishTime
+      if (timeNs == null) continue
+      const tSec = nsToSec(timeNs) - baseSec
 
-        // (2) 시간 간격 다운샘플(옵션)
-        if (timeDownsampleMs != null && Number.isFinite(tSec)) {
-          if (lastTs > -Infinity && (tSec - lastTs) * 1000 < timeDownsampleMs) {
-            // skip
-          } else {
-            lastTs = tSec
-          }
-        }
-
-        // (3) 최소 디코딩
-        const ch = channelsById.get(msg.channelId)
-        const obj = await tryDecodePayload(msg.data, ch, schemaResolver)
-
-        const pose = obj ? pickXYYawDeep(obj) : null
-        if (pose && Number.isFinite(tSec)) {
-          const rec = { tSec, x: pose.x, y: pose.y, z: Number(pose.z) || 0, yaw: Number(pose.yaw) || 0 }
-          out.push(rec)
-          batch.push(rec)
-          accepted++
-
-          if (onBatch && batch.length >= batchSize) {
-            onBatch(batch)
-            batch = []
-            // 메인 스레드 양보(첫 화면 빠르게)
-            await Promise.resolve()
-          }
+      // ✅ 시간 기반 다운샘플 (결정적: 같은 입력 → 항상 같은 출력)
+      if (effTimeDownsampleMs > 0 && Number.isFinite(tSec)) {
+        if (lastTs > -Infinity && (tSec - lastTs) * 1000 < effTimeDownsampleMs) {
+          continue
+        } else {
+          lastTs = tSec
         }
       }
 
-      const elapsed = performance.now() - startMs
-      if (!fullScan && (accepted >= previewLimit || elapsed >= maxMillis)) {
-        // 프리뷰 조기 종료
-        break
+      const ch = channelsById.get(msg.channelId)
+      const obj = await decodeMsgToObject(msg, ch, schemaResolver, { decoder: poseDecoder, tryUtf8Json: true })
+
+      const pose = obj ? pickXYYawDeep(obj) : null
+      if (pose && Number.isFinite(tSec)) {
+        const rec = { tSec, x: pose.x, y: pose.y, z: Number(pose.z) || 0, yaw: Number(pose.yaw) || 0 }
+        out.push(rec)
+        accepted++
       }
+
+      // ✅ UI 프리즈 방지: onBatch를 안 쓰는 경우에도 주기적으로 양보
+      if ((total & 0x3ff) === 0) {
+        await Promise.resolve()
+      }
+
+      // ✅ UI 프리즈 방지: 1024 메시지마다 양보
+      if ((total & 0x3ff) === 0) await Promise.resolve()
     }
   } catch (e) {
     console.error('P1: readMessages() failed on poseTopic', e)
   }
 
-  if (onBatch && batch.length) onBatch(batch)
-  console.log(`pose summary: topic="${chosen}", msgs=${total}, accepted=${accepted}, preview=${!fullScan}`)
-  return out
-}
-
-/// ===== [REPLACE] 기존 export async function loadPathFromMcapUrl(...) 전체 교체 =====
-export async function loadPathFromMcapUrl(url, options = {}) {
-  const {
-    topic = '/master_service/path',
-    decompressHandlers,
-    onBatch, // (arr) => void  - 읽히는 대로 전달
-    batchSize = 500,
-    previewLimit = 8000, // 프리뷰로 미리 그릴 최대 점 개수
-    maxMillis = 2000, // 프리뷰 시간 상한
-    fullScan = false, // true면 끝까지
-
-    // 🔎 디버그 옵션 추가
-    debug = false,
-    debugMax = 6, // 처음 N개 메시지까지 세부 로그
-    downsample = 1, // (선택) 샘플 수가 과하면 stride
-    timeDownsampleMs = 0 // (선택) 시간 간격으로 희소화
-  } = options
-
-  const { reader } = await getOrOpenIndexedReaderFromUrl(url, { decompressHandlers })
-
-  // ── 토픽 후보: 원본 + 소문자 + 알려진 별칭
-  const topicLC = String(topic)
-
-  const candidates = [
-    '/plan',
-    '/plan_smoothed',
-    '/transformed_global_plan',
-    topicLC,
-    topicLC.toLowerCase(),
-    '/master_service/path',
-    '/path',
-    '/trajectory',
-    '/planned_path'
-  ]
-
-  const chosen = findTopicByCandidates(reader, candidates)
-
-  if (!chosen) {
-    if (debug) {
-      const allTopics = Array.from((reader.channelsById || new Map()).values()).map((ch) => ch.topic)
-      console.warn('[PATH] topic not found. candidates=', candidates, 'available=', allTopics)
-    }
-    return []
-  }
-  if (debug) console.debug('[PATH] chosen topic =', chosen)
-
-  const channelsById = reader.channelsById || new Map()
-  const schemasById = reader.schemasById || new Map()
-  const schemaResolver = (id) => (id != null ? (schemasById.get(id) ?? null) : null)
-
-  const out = []
-  let batch = []
-  const startMs = performance.now()
-
-  function extractItemTimeSec(item, fallback, rootObj, msgTimeSec) {
-    const t1 = stampToSec(item?.header?.stamp)
-    const t2 = stampToSec(item?.pose?.header?.stamp)
-    const tRoot = stampToSec(rootObj?.header?.stamp)
-    const t = t1 ?? t2 ?? tRoot ?? null
-    return Number.isFinite(t) ? t : Number.isFinite(fallback) ? fallback : msgTimeSec
+  // ✅ 안정화: 시간순 정렬 + 같은 tSec 중복 제거(마지막 값을 채택)
+  out.sort((a, b) => a.tSec - b.tSec)
+  for (let i = out.length - 2; i >= 0; i--) {
+    if (out[i].tSec === out[i + 1].tSec) out.splice(i, 1)
   }
 
-  // 다양한 모양을 대응하는 포인트 추출기(확장)
-  function extractPointsFromAny(obj) {
-    if (!obj) return []
+  // ✅ 시간순 정렬 보장 (readMessages 순서가 흔들려도 안전)
+  out.sort((a, b) => a.tSec - b.tSec)
 
-    const tryLists = [
-      obj.poses,
-      obj.path,
-      obj.points,
-      obj.waypoints,
-      obj.nodes,
-      obj.trajectory,
-      Array.isArray(obj) ? obj : null,
-      // 중첩 케이스
-      obj?.path?.poses,
-      obj?.plan?.poses,
-      obj?.planned?.poses,
-      obj?.trajectory?.points
-    ].filter(Boolean)
-
-    for (const list of tryLists) {
-      if (!Array.isArray(list)) continue
-      const tmp = []
-      for (const item of list) {
-        const pos = item?.pose?.pose?.position ?? item?.pose?.position ?? item?.position ?? item?.point ?? null
-
-        if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') {
-          tmp.push({ item, x: +pos.x || 0, y: +pos.y || 0, z: +pos.z || 0 })
-        } else if (typeof item?.x === 'number' && typeof item?.y === 'number') {
-          tmp.push({ item, x: +item.x || 0, y: +item.y || 0, z: +item.z || 0 })
-        }
-      }
-      if (tmp.length) return tmp
-    }
-
-    // 단일 객체에 좌표가 있는 경우
-    const pos = obj?.pose?.pose?.position ?? obj?.pose?.position ?? obj?.position ?? obj?.point ?? null
-
-    if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') {
-      return [{ item: obj, x: +pos.x || 0, y: +pos.y || 0, z: +pos.z || 0 }]
-    }
-    if (typeof obj?.x === 'number' && typeof obj?.y === 'number') {
-      return [{ item: obj, x: +obj.x || 0, y: +obj.y || 0, z: +obj.z || 0 }]
-    }
-
-    return []
-  }
-
-  function safePreview(o) {
-    try {
-      if (!o || typeof o !== 'object') return String(o)
-      const keys = Object.keys(o).slice(0, 20)
-      const prev = {}
-      for (const k of keys) prev[k] = typeof o[k]
-      return { keys, types: prev }
-    } catch {
-      return typeof o
-    }
-  }
-
-  // 시간 기반 다운샘플 보조
-  let lastKeptTimeSec = -Infinity
-  function timePass(t) {
-    if (!Number.isFinite(timeDownsampleMs) || timeDownsampleMs <= 0) return true
-    const ok = (t - lastKeptTimeSec) * 1000 >= timeDownsampleMs
-    if (ok) lastKeptTimeSec = t
-    return ok
-  }
-
-  let totalMsgs = 0,
-    keptCount = 0
-  try {
-    if (debug) {
-      // 토픽 메타 요약
-      const anyCh = Array.from(channelsById.values()).find((c) => c.topic === chosen)
-      const sch = schemaResolver(anyCh?.schemaId)
-      console.debug('[PATH] channel meta =', {
-        topic: chosen,
-        channelId: anyCh?.id ?? anyCh?.channelId,
-        messageEncoding: anyCh?.messageEncoding,
-        schemaId: anyCh?.schemaId,
-        schemaName: sch?.name,
-        schemaEncoding: sch?.encoding
-      })
-    }
-
-    for await (const msg of reader.readMessages({ topics: [chosen] })) {
-      totalMsgs++
-      const msgTimeSec = nsToSec(msg.logTime ?? msg.publishTime)
-      const ch = channelsById.get(msg.channelId)
-      const schema = schemaResolver(ch?.schemaId)
-
-      if (debug && totalMsgs <= debugMax) {
-        console.debug('PATH check #msg:', totalMsgs, {
-          channelId: msg.channelId,
-          topic: ch?.topic,
-          messageEncoding: ch?.messageEncoding,
-          schemaName: schema?.name,
-          schemaEncoding: schema?.encoding,
-          dataLen: msg.data?.byteLength ?? msg.data?.length ?? 0
-        })
-      }
-
-      const obj = await tryDecodePayload(msg.data, ch, schemaResolver)
-      if (debug && totalMsgs <= debugMax && !obj) {
-        // 기존 debug 동작 유지(내용만 간단화)
-        try {
-          const s = textDecoder?.decode?.(msg.data)
-          console.debug('[PATH] utf8 head:', s?.slice?.(0, 120))
-        } catch {}
-      }
-
-      if (debug && totalMsgs <= debugMax) {
-        console.debug('PATH check obj preview:', safePreview(obj))
-      }
-
-      let pts = extractPointsFromAny(obj)
-      if (!pts.length) {
-        // 흔한 중첩 키들 한번 더 시도
-        pts =
-          extractPointsFromAny(obj?.path) ||
-          extractPointsFromAny(obj?.plan) ||
-          extractPointsFromAny(obj?.planned) ||
-          extractPointsFromAny(obj?.trajectory) ||
-          []
-      }
-
-      if (debug && totalMsgs <= debugMax) {
-        console.debug('PATH check pts len:', pts.length)
-      }
-
-      if (pts.length) {
-        // (옵션) stride 다운샘플
-        let stride = Math.max(1, Math.floor(downsample || 1))
-        let k = 0
-        for (const r of pts) {
-          // 시간 결정
-          const tSec = extractItemTimeSec(r.item, null, obj, msgTimeSec) ?? msgTimeSec ?? 0
-          if (!Number.isFinite(tSec)) continue
-
-          // 시간기반 다운샘플
-          if (!timePass(tSec)) continue
-
-          // stride
-          if (k++ % stride !== 0) continue
-
-          const rec = { tSec, x: r.x, y: r.y, z: r.z }
-          out.push(rec)
-          batch.push(rec)
-          keptCount++
-
-          if (onBatch && batch.length >= batchSize) {
-            try {
-              onBatch(batch)
-            } catch (e) {
-              if (debug) console.warn('[PATH] onBatch error:', e)
-            }
-            batch = []
-            await Promise.resolve() // 메인 스레드 양보
-          }
-        }
-      }
-
-      // 프리뷰 상한(시간/개수) 도달 시 조기 종료
-      if (!fullScan) {
-        const elapsed = performance.now() - startMs
-        if (out.length >= previewLimit || elapsed >= maxMillis) break
-      }
-    }
-  } catch (e) {
-    console.warn('[PATH] readMessages failed:', e)
-  }
-
-  if (onBatch && batch.length) {
-    try {
-      onBatch(batch)
-    } catch (e) {
-      if (debug) console.warn('[PATH] final onBatch error:', e)
-    }
-  }
-
-  if (debug) {
-    console.debug(`[PATH] done: msgs=${totalMsgs}, points=${out.length}, kept=${keptCount}`)
-  }
+  console.log(
+    `pose summary: topic="${chosen}", msgs=${total}, accepted=${accepted}, isWindow=${isWindow}, timeDs=${effTimeDownsampleMs}`
+  )
   return out
 }
 
@@ -884,12 +1463,86 @@ export async function loadOccupancyGridFromMcapUrl(
     // 선택 전략: 점수 기반이므로 기본은 'score'로 두되, 'first'도 지원
     select = 'first', // 'first' | 'latest'
     maxMessages = 1200,
-    VERBOSE = false
+    VERBOSE = false,
+    onTimeBounds // ✅ [ADD] (bounds) => void
   } = {}
 ) {
-  const { reader } = await getOrOpenIndexedReaderFromUrl(url, { decompressHandlers })
+  // ✅ Step1: map(OccupancyGrid)만 HTTP Range로 테스트
+  const { reader } = await getOrOpenIndexedReaderFromUrl(url, {
+    decompressHandlers,
+    useHttpRange: true
+  })
+  const cis = Array.isArray(reader?.chunkIndexes) ? reader.chunkIndexes : []
+  // ===============================
+  // ✅ Step 2-A: 전체 타임라인 bounds 계산 (Foxglove 스타일)
+  // 1) Statistics.messageStartTime/messageEndTime 우선
+  // 2) 없거나 이상하면 chunkIndexes의 messageStartTime/messageEndTime로 fallback
+  // ===============================
+  const pickBounds = () => {
+    const st = reader?.statistics
+    // @mcap/core Statistics: messageStartTime/messageEndTime [1](https://mcap.dev/docs/typescript/types/_mcap_core.McapTypes.Statistics)
+    const s0 = st?.messageStartTime
+    const e0 = st?.messageEndTime
+
+    // (A) statistics 후보
+    if (s0 != null && e0 != null) {
+      // 혹시 뒤집힌/이상값이면(Studio가 chunk time을 쓰는 케이스 존재)
+      if (typeof s0 === 'bigint' && typeof e0 === 'bigint' && e0 > s0) {
+        return { startNs: s0, endNs: e0, source: 'statistics' }
+      }
+    }
+
+    // (B) chunkIndexes fallback (ChunkIndex에 messageStartTime/messageEndTime 존재)
+    if (Array.isArray(cis) && cis.length) {
+      let min = null
+      let max = null
+      for (const ci of cis) {
+        const cs = ci?.messageStartTime ?? ci?.message_start_time
+        const ce = ci?.messageEndTime ?? ci?.message_end_time
+        if (typeof cs === 'bigint') min = min == null ? cs : cs < min ? cs : min
+        if (typeof ce === 'bigint') max = max == null ? ce : ce > max ? ce : max
+      }
+      if (min != null && max != null && max > min) {
+        return { startNs: min, endNs: max, source: 'chunkIndexes' }
+      }
+    }
+    return null
+  }
+
+  const bounds = pickBounds()
+  if (bounds) {
+    const statStartSec = Number(bounds.startNs) / 1e9
+    const statEndSec = Number(bounds.endNs) / 1e9
+    const durationSec = Math.max(0, statEndSec - statStartSec)
+    console.log('[Step2-A][STAT]', { statStartSec, statEndSec, durationSec, source: bounds.source })
+    if (typeof onTimeBounds === 'function') {
+      onTimeBounds({ ...bounds, startSec: statStartSec, endSec: statEndSec, durationSec })
+    }
+  } else {
+    console.log('[Step2-A][STAT]else', {
+      hasStatistics: !!reader?.statistics,
+      statisticsKeys: reader?.statistics ? Object.keys(reader.statistics) : null,
+      chunkIndexes: reader?.chunkIndexes?.length
+    })
+  }
+
+  // ✅ 여기에 추가
+  console.log('[MCAP][INDEX]', {
+    chunkIndexes: reader.chunkIndexes?.length,
+    hasStatistics: !!reader.statistics,
+    summaryOffsets: reader.summaryOffsetsByOpcode?.size,
+    channels: reader.channelsById?.size
+  })
+
+  console.log('[GRID][STEP2] reader meta', {
+    channels: reader.channelsById?.size,
+    schemas: reader.schemasById?.size,
+    chunkIndexes: reader.chunkIndexes?.length,
+    hasStatistics: !!reader.statistics
+  })
 
   const chosenTopic = pickOccupancyGridTopic(reader)
+  console.log('[GRID][STEP3] chosenTopic', chosenTopic)
   if (!chosenTopic) {
     console.warn('[GRID]: no candidate topic found. available:', listAllChannels(reader))
     return null
@@ -930,14 +1583,33 @@ export async function loadOccupancyGridFromMcapUrl(
   let firstValid = null
   let lastValid = null
   let count = 0
+  let msgCount = 0
 
   try {
     for await (const msg of reader.readMessages({ topics: [chosenTopic] })) {
+      msgCount++
+
+      if (msgCount === 1) {
+        console.log('[GRID][STEP4] first msg', {
+          channelId: msg.channelId,
+          dataLen: msg.data?.byteLength,
+          logTime: msg.logTime,
+          publishTime: msg.publishTime
+        })
+      }
+
       const ch = channelsById.get(msg.channelId)
       const obj = await decodeMsgToObject(msg, ch, schemaResolver, { decoder: gridDecoder, tryUtf8Json: true })
-
       const grid = normalizeGrid(obj)
       count++
+      console.timeEnd('[GRID][STEP5] normalize')
+
+      console.log('[GRID][STEP5] normalize result', {
+        ok: !!grid,
+        w: grid?.width,
+        h: grid?.height,
+        res: grid?.resolution
+      })
 
       if (!grid) {
         // 필요 시 VERBOSE에서만 상세 로그
@@ -953,12 +1625,23 @@ export async function loadOccupancyGridFromMcapUrl(
   } catch (e) {
     console.warn('[GRID] readMessages failed:', e)
   }
-
+  console.log('[GRID][STEP4] total grid msgs read =', msgCount)
   // 최종 선택: best -> firstValid -> null
   const resultGrid = select === 'latest' ? (lastValid ?? firstValid) : (firstValid ?? lastValid)
   if (!resultGrid) {
     console.warn('[GRID]: no valid OccupancyGrid on topic:', chosenTopic)
   }
+
+  // ✅ ImageBitmap 사전 생성 → 렌더러에서 drawImage 1회로 완료
+  if (resultGrid) {
+    try {
+      resultGrid.imageBitmap = await gridToImageBitmap(resultGrid)
+      console.log('[GRID] ImageBitmap ready:', resultGrid.width, '×', resultGrid.height)
+    } catch (e) {
+      console.warn('[GRID] ImageBitmap creation failed (fallback to raw):', e)
+    }
+  }
+
   return resultGrid
 }
 
@@ -1250,762 +1933,109 @@ export async function loadLaserScansForMapFromMcapUrl(url, options = {}) {
 
   return out
 }
-// ===== [ADD] Local Costmap (OccupancyGrid) time-series streaming loader =====
-/**
- * 로컬 코스트맵(OccupancyGrid)을 시간 순서대로 스트리밍하여 프레임 배열을 전달한다.
- * onBatch: (arr: { tSec:number, grid: {width,height,resolution,origin:{x,y,yaw},data:Uint8Array}, frameId?:string }[]) => void
- */
-export async function loadLocalCostmapSeriesFromMcapUrl(url, options = {}) {
+
+export async function loadRosoutFromMcapUrl(url, options = {}) {
   const {
-    // 대표 local costmap (ROS 표준)
-    topic = '/local_costmap/costmap',
+    logTopic = '/rosout',
     decompressHandlers,
-    onBatch, // (arr) => void
-    batchSize = 1, // 프레임 단위
-    fullScan = true,
-    previewLimit = Infinity,
-    maxMillis = Infinity,
-    // 시간 희소화(선택)
-    timeDownsampleMs = 0,
-    // 디버그
-    VERBOSE = false,
-    // 🔄 시간 기준 선택(기본: logTime) — 필요 시 'header'로 바꿔 재현/검증 가능
-    timeSource = 'logTime' // 'logTime' | 'header'
+    onBatch,
+    batchSize = 200,
+    maxLines = 50000,
+    startSec = null,
+    endSec = null
   } = options
 
-  const { reader } = await getOrOpenIndexedReaderFromUrl(url, { decompressHandlers })
-  const candidates = [
-    String(topic).toLowerCase(),
-    '/local_costmap/costmap',
-    '/debug/dwa_local_costmap',
-    // 기존 느슨한 후보는 유지(호환 목적)
-    '/local_costmap',
-    '/costmap'
-  ]
+  const { reader } = await getOrOpenIndexedReaderFromUrl(url, {
+    decompressHandlers,
+    useHttpRange: true
+  })
 
+  const candidates = [String(logTopic).toLowerCase(), '/rosout', '/rosout_agg']
   const chosen = findTopicByCandidates(reader, candidates)
-  if (!chosen) {
-    console.warn('[LCM-SERIES] topic not found. candidates=', candidates)
-    return []
-  }
-  if (VERBOSE) console.log('[LCM-SERIES] chosen topic =', chosen)
+  if (!chosen) return { found: false, entries: [], topic: null }
 
   const channelsById = reader.channelsById || new Map()
   const schemasById = reader.schemasById || new Map()
   const schemaResolver = (id) => (id != null ? (schemasById.get(id) ?? null) : null)
 
-  // decode helper (schema decoder 있으면 사용)
   let decoder = null
   try {
-    const anyCh = Array.from(channelsById.values()).find((c) => c.topic === chosen)
-    const sch = anyCh?.schemaId != null ? schemasById.get(anyCh.schemaId) : null
+    const ch = [...channelsById.values()].find((c) => c.topic === chosen)
+    const sch = ch?.schemaId != null ? schemasById.get(ch.schemaId) : null
     if (sch) decoder = await buildDecoderForSchema(sch)
   } catch {}
 
-  const out = []
-  let batch = []
-  let frames = 0
-  let lastKeptSec = -Infinity
-  const startMs = performance.now()
+  const baseNs = reader.statistics?.messageStartTime ?? undefined
+  const baseSec = baseNs != null ? nsToSec(baseNs) : 0
+  const secToNs = (s) => BigInt(Math.floor(Number(s) * 1e9))
+  const isWindow = startSec != null && endSec != null
 
+  const readArgs = {
+    topics: [chosen],
+    startTime: isWindow && baseNs != null ? baseNs + secToNs(startSec) : undefined,
+    endTime: isWindow && baseNs != null ? baseNs + secToNs(endSec) : undefined
+  }
+
+  // ✅ chunk prefetch (windowed 또는 full-range)
   try {
-    for await (const msg of reader.readMessages({ topics: [chosen] })) {
-      const msgSec = nsToSec(msg.logTime ?? msg.publishTime)
-
-      // 시간 희소화
-      if (Number.isFinite(timeDownsampleMs) && timeDownsampleMs > 0) {
-        if ((msgSec - lastKeptSec) * 1000 < timeDownsampleMs) continue
-        lastKeptSec = msgSec
-      }
-
-      // schema decoder 우선
-      // generic
-      const ch = channelsById.get(msg.channelId)
-      const obj = await decodeMsgToObject(msg, ch, schemaResolver, { decoder, tryUtf8Json: false })
-      // 최후의 수단: utf8 -> JSON
-      if (!obj) continue
-
-      const grid = normalizeOccupancyGrid(obj)
-      if (!grid) continue
-
-      // tSec 결정: ✅ 기본은 msg.logTime(=재생 시작 기준 상대 시간) 우선
-      const tMsg = nsToSec(msg.logTime ?? msg.publishTime)
-      const tHeader = stampToSec(obj?.header?.stamp) ?? stampToSec(obj?.info?.header?.stamp)
-      let tSec = null
-      if (timeSource === 'header') {
-        tSec = Number.isFinite(tHeader) ? tHeader : tMsg
-      } else {
-        tSec = Number.isFinite(tMsg) ? tMsg : tHeader
-      }
-      if (!Number.isFinite(tSec)) continue
-
-      // (선택) 디버깅: header vs msg 시간차가 큰 로그를 알림
-      if (VERBOSE && Number.isFinite(tMsg) && Number.isFinite(tHeader)) {
-        const gap = Math.abs(tHeader - tMsg)
-        if (gap > 5) {
-          console.warn('[LCM-SERIES] time gap(header - logTime)=', gap.toFixed(3), 'sec', {
-            topic: chosen,
-            tMsg,
-            tHeader
-          })
-        }
-      }
-
-      if (!Number.isFinite(tSec)) continue
-
-      const rec = { tSec, grid }
-      out.push(rec)
-      batch.push(rec)
-      frames++
-
-      if (onBatch && batch.length >= batchSize) {
-        try {
-          onBatch(batch)
-        } catch (e) {
-          if (VERBOSE) console.warn('[LCM-SERIES] onBatch error', e)
-        }
-        batch = []
-        await Promise.resolve()
-      }
-
-      // 프리뷰 조기종료
-      const elapsed = performance.now() - startMs
-      if (!fullScan && (frames >= previewLimit || elapsed >= maxMillis)) break
+    const pStart = readArgs.startTime ?? reader.statistics?.messageStartTime
+    const pEnd = readArgs.endTime ?? reader.statistics?.messageEndTime
+    if (pStart != null && pEnd != null) {
+      await prefetchChunksForTimeWindow(reader, pStart, pEnd, { padChunks: 1 })
     }
   } catch (e) {
-    console.warn('[LCM-SERIES] readMessages failed:', e)
+    console.warn('[ROSOUT][PREFETCH]', e)
   }
 
-  if (onBatch && batch.length) {
-    try {
-      onBatch(batch)
-    } catch {}
-  }
-  return out
-}
-// ===== [ADD] DWA Goal (PoseStamped 계열) time-series streaming loader =====
-/**
- * /debug/dwa_goal 같은 goal 포즈를 시간 순서대로 스트리밍한다.
- * 출력 항목:
- *   { tSec:number, x:number, y:number, z:number, yaw:number, frame_id?:string }
- *
- * 옵션:
- *   - topic: 기본 '/debug/dwa_goal'
- *   - timeDownsampleMs: 시간 간 희소화(기본 0=비활성)
- *   - timeSource: 'logTime' | 'header' (기본 'logTime')
- *   - onBatch, batchSize: 스트리밍 콜백
- *   - fullScan/previewLimit/maxMillis: 프리뷰 제어
- */
-export async function loadDwaGoalSeriesFromMcapUrl(url, options = {}) {
-  const {
-    // 대표 goal (ROS 표준)
-    topic = '/goal_pose',
-    decompressHandlers,
-    onBatch, // (arr) => void
-    batchSize = 1, // goal은 프레임 단위로 1개씩 내려주는게 일반적
-    fullScan = true,
-    previewLimit = Infinity,
-    maxMillis = Infinity,
-    timeDownsampleMs = 0,
-    timeSource = 'logTime', // 'header'로 바꾸면 header.stamp 우선
-    VERBOSE = false
-  } = options
-
-  const { reader } = await getOrOpenIndexedReaderFromUrl(url, { decompressHandlers })
-  const candidates = [
-    String(topic).toLowerCase(),
-    '/goal_pose',
-    '/debug/dwa_goal',
-    '/dwa_goal',
-    '/goal',
-    '/move_base_simple/goal'
-  ]
-
-  const chosen = findTopicByCandidates(reader, candidates)
-  if (!chosen) {
-    if (VERBOSE) console.warn('[DWA-GOAL] topic not found. candidates=', candidates)
-    return []
-  }
-  if (VERBOSE) console.log('[DWA-GOAL] chosen topic =', chosen)
-
-  const channelsById = reader.channelsById || new Map()
-  const schemasById = reader.schemasById || new Map()
-  const schemaResolver = (id) => (id != null ? (schemasById.get(id) ?? null) : null)
-
-  // ---- pose 추출 유틸 (loadPosesFromMcapUrl과 동일한 접근을 경량 복사) ----
-  const pickXYYawDeep = pickPose2dStamped
-  function extractFrameId(obj) {
-    return (
-      String(obj?.header?.frame_id ?? obj?.pose?.header?.frame_id ?? obj?.goal?.header?.frame_id ?? '') || undefined
-    )
-  }
-
-  const out = []
+  const entries = []
   let batch = []
-  const startMs = performance.now()
-  let lastKeptSec = -Infinity
-  let frames = 0
+  let count = 0
 
   try {
-    for await (const msg of reader.readMessages({ topics: [chosen] })) {
-      const tMsg = nsToSec(msg.logTime ?? msg.publishTime)
+    for await (const msg of reader.readMessages(readArgs)) {
+      const timeNs = msg.logTime ?? msg.publishTime
+      if (timeNs == null) continue
+      const epochMs = Math.round(Number(timeNs) / 1e6)
+      const tSec = nsToSec(timeNs) - baseSec
 
-      // 시간 희소화
-      if (Number.isFinite(timeDownsampleMs) && timeDownsampleMs > 0) {
-        if ((tMsg - lastKeptSec) * 1000 < timeDownsampleMs) continue
-        lastKeptSec = tMsg
-      }
-
-      // 디코드
       const ch = channelsById.get(msg.channelId)
-      const obj = await decodeMsgToObject(msg, ch, schemaResolver, { tryUtf8Json: false })
-      if (!obj) continue
-
-      const pose = pickXYYawDeep(obj)
-      if (!pose) continue
-
-      const tHeader =
-        stampToSec(obj?.header?.stamp) ??
-        stampToSec(obj?.pose?.header?.stamp) ??
-        stampToSec(obj?.goal?.header?.stamp) ??
-        null
-      const tSec =
-        timeSource === 'header' ? (Number.isFinite(tHeader) ? tHeader : tMsg) : Number.isFinite(tMsg) ? tMsg : tHeader
-      if (!Number.isFinite(tSec)) continue
-
-      const frame_id = extractFrameId(obj)
-      const rec = { tSec, x: pose.x, y: pose.y, z: Number(pose.z) || 0, yaw: Number(pose.yaw) || 0, frame_id }
-      out.push(rec)
-      batch.push(rec)
-      frames++
-
-      if (onBatch && batch.length >= batchSize) {
-        try {
-          onBatch(batch)
-        } catch {}
-        batch = []
-        await Promise.resolve()
-      }
-
-      // 프리뷰 종료 조건
-      if (!fullScan) {
-        const elapsed = performance.now() - startMs
-        if (frames >= previewLimit || elapsed >= maxMillis) break
-      }
-    }
-  } catch (e) {
-    if (VERBOSE) console.warn('[DWA-GOAL] readMessages failed:', e)
-  }
-
-  if (onBatch && batch.length) {
-    try {
-      onBatch(batch)
-    } catch {}
-  }
-  return out
-}
-// ===== [ADD] Replay 전용: pose/grid/path/lidar/costmap/goal/rosout를 1-pass로 fan-out =====
-export async function scanReplayAllOnceFromMcapUrl(url, options = {}) {
-  const {
-    decompressHandlers,
-
-    // topic candidates (기본값은 useLogReplayData TOPICS와 호환)
-    poseCandidates = ['/carto_service/trackedpose', '/odom', '/lio_odom', '/aslam_pose'],
-    pathCandidates = ['/master_service/path', '/plan', '/transformed_global_plan', '/planned_path', '/path'],
-    lidarCandidates = ['/lidar_service/data', '/scan', '/laser', '/laser_scan'],
-    costmapCandidates = ['/local_costmap/costmap', '/debug/dwa_local_costmap', '/local_costmap', '/costmap'],
-    goalCandidates = ['/debug/dwa_goal', '/goal_pose', '/move_base_simple/goal', '/goal'],
-    rosoutCandidates = ['/rosout'],
-    gridCandidates = null, // null이면 pickOccupancyGridTopic 사용
-
-    // streaming callbacks
-    onPoseBatch, // (arr: {tSec,x,y,z,yaw}[]) => void
-    onPathBatch, // (arr: {tSec,x,y,z}[]) => void
-    onLidarBatch, // (arr: {tSec,xy,count,frameId}[]) => void
-    onCostmapBatch, // (arr: {tSec,grid}[]) => void
-    onGoalBatch, // (arr: {tSec,x,y,z,yaw,frame_id?}[]) => void
-    onLogBatch, // (lines: string[]) => void
-    onGridOnce, // (grid) => void
-
-    // perf knobs
-    poseTimeDownsampleMs = 80,
-    poseDownsample = 3,
-    poseBatchSize = 400,
-
-    pathStride = 1,
-    pathBatchSize = 1000,
-
-    lidarTimeDownsampleMs = 80,
-    lidarPointDownsample = 2,
-    lidarClampToRange = true,
-    lidarBatchSize = 1,
-
-    costmapTimeDownsampleMs = 80,
-    costmapTimeSource = 'logTime', // 'logTime' | 'header'
-    costmapBatchSize = 1,
-
-    goalTimeDownsampleMs = 0,
-    goalTimeSource = 'logTime', // 'logTime' | 'header'
-    goalBatchSize = 1,
-
-    logMaxLines = 20000,
-    logBatchSize = 80
-  } = options
-
-  const { reader } = await getOrOpenIndexedReaderFromUrl(url, { decompressHandlers })
-
-  // ──────────────────────────────────────────────────────────────
-  // 1) 토픽 선택(스캔 시작 전 1회)
-  // ──────────────────────────────────────────────────────────────
-  const poseChosen = findTopicByCandidates(
-    reader,
-    poseCandidates.map((s) => String(s).toLowerCase())
-  )
-  const pathChosen = findTopicByCandidates(
-    reader,
-    pathCandidates.map((s) => String(s).toLowerCase())
-  )
-  const lidarChosen = findTopicByCandidates(
-    reader,
-    lidarCandidates.map((s) => String(s).toLowerCase())
-  )
-  const costmapChosen = findTopicByCandidates(
-    reader,
-    costmapCandidates.map((s) => String(s).toLowerCase())
-  )
-  const goalChosen = findTopicByCandidates(
-    reader,
-    goalCandidates.map((s) => String(s).toLowerCase())
-  )
-  const rosoutChosen = findTopicByCandidates(
-    reader,
-    rosoutCandidates.map((s) => String(s).toLowerCase())
-  )
-
-  const gridChosen = gridCandidates
-    ? findTopicByCandidates(
-        reader,
-        gridCandidates.map((s) => String(s).toLowerCase())
-      )
-    : pickOccupancyGridTopic(reader)
-
-  const topics = [poseChosen, pathChosen, lidarChosen, costmapChosen, goalChosen, rosoutChosen, gridChosen]
-    .filter(Boolean)
-    .filter((v, i, a) => a.indexOf(v) === i)
-
-  // 스캔할 토픽이 하나도 없으면 종료
-  if (!topics.length) {
-    console.warn('[scanReplayAllOnceFromMcapUrl] no topics selected')
-    return
-  }
-
-  const channelsById = reader.channelsById || new Map()
-  const schemasById = reader.schemasById || new Map()
-  const schemaResolver = (id) => (id != null ? (schemasById.get(id) ?? null) : null)
-
-  // ──────────────────────────────────────────────────────────────
-  // 2) schema decoder 캐시 (schemaId -> Promise<decoder|null>)
-  // ──────────────────────────────────────────────────────────────
-  const decoderPromiseBySchemaId = new Map()
-  async function getDecoderForChannel(ch) {
-    const sid = ch?.schemaId
-    if (sid == null) return null
-    if (!decoderPromiseBySchemaId.has(sid)) {
-      const sch = schemaResolver(sid)
-      decoderPromiseBySchemaId.set(sid, sch ? buildDecoderForSchema(sch).catch(() => null) : Promise.resolve(null))
-    }
-    return await decoderPromiseBySchemaId.get(sid)
-  }
-
-  // ──────────────────────────────────────────────────────────────
-  // 3) 유틸(로컬 함수들)
-  // ──────────────────────────────────────────────────────────────
-  const stampOrMsgToSec = (obj, msgSec) => {
-    const tHeader =
-      stampToSec(obj?.header?.stamp) ?? stampToSec(obj?.pose?.header?.stamp) ?? stampToSec(obj?.info?.header?.stamp)
-    return Number.isFinite(tHeader) ? tHeader : msgSec
-  }
-
-  // PATH: 다양한 형태에서 포인트 추출
-  function extractPathPointsAny(obj) {
-    if (!obj) return []
-    const tryLists = [
-      obj.poses,
-      obj.path,
-      obj.points,
-      obj.waypoints,
-      obj.nodes,
-      obj.trajectory,
-      Array.isArray(obj) ? obj : null,
-      obj?.path?.poses,
-      obj?.plan?.poses,
-      obj?.planned?.poses,
-      obj?.trajectory?.points
-    ].filter(Boolean)
-
-    for (const list of tryLists) {
-      if (!Array.isArray(list)) continue
-      const tmp = []
-      for (const item of list) {
-        const pos = item?.pose?.pose?.position ?? item?.pose?.position ?? item?.position ?? item?.point ?? null
-        if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') {
-          tmp.push({ x: +pos.x || 0, y: +pos.y || 0, z: +pos.z || 0 })
-        } else if (typeof item?.x === 'number' && typeof item?.y === 'number') {
-          tmp.push({ x: +item.x || 0, y: +item.y || 0, z: +item.z || 0 })
-        }
-      }
-      if (tmp.length) return tmp
-    }
-    return []
-  }
-
-  // LIDAR: normalize + trig cache
-  function normalizeRawScan(obj) {
-    if (!obj || typeof obj !== 'object') return null
-    const root = obj.scan && typeof obj.scan === 'object' ? obj.scan : obj
-
-    const asF32 = (a) => {
-      if (a == null) return null
-      if (a instanceof Float32Array) return a
-      if (Array.isArray(a)) return Float32Array.from(a)
-      if (ArrayBuffer.isView(a)) return new Float32Array(a.buffer, a.byteOffset, a.byteLength / 4)
-      if (typeof a === 'object') {
-        const keys = Object.keys(a)
-          .map((k) => (Number.isFinite(Number(k)) ? Number(k) : null))
-          .filter((n) => n != null)
-          .sort((x, y) => x - y)
-        if (!keys.length) return null
-        const out = new Float32Array(keys.length)
-        for (let i = 0; i < keys.length; i++) out[i] = Number(a[keys[i]])
-        return out
-      }
-      return null
-    }
-
-    const ranges = asF32(root.ranges)
-    if (!ranges || !ranges.length) return null
-
-    const angles = asF32(root.angles)
-
-    return {
-      ranges,
-      angles,
-      angle_min: Number(root.angle_min ?? 0),
-      angle_increment: Number(root.angle_increment ?? 0),
-      range_min: Number(root.range_min ?? 0),
-      range_max: Number(root.range_max ?? Number.POSITIVE_INFINITY),
-      frame_id: String(root?.header?.frame_id ?? obj?.header?.frame_id ?? 'laser')
-    }
-  }
-
-  const makeAngles = (min, inc, n) => {
-    const out = new Float32Array(n)
-    for (let i = 0, a = min; i < n; i++, a += inc) out[i] = a
-    return out
-  }
-  const precomputeCosSin = (angles) => {
-    const n = angles.length
-    const cos = new Float32Array(n)
-    const sin = new Float32Array(n)
-    for (let i = 0; i < n; i++) {
-      const a = angles[i]
-      cos[i] = Math.cos(a)
-      sin[i] = Math.sin(a)
-    }
-    return { cos, sin }
-  }
-  const toXYFast = ({ ranges, angles, cos, sin, range_min, range_max, stride, clamp }) => {
-    const n = ranges.length
-    const cap = Math.ceil(n / Math.max(1, stride)) * 2
-    const xy = new Float32Array(cap)
-    let k = 0
-    for (let i = 0; i < n; i += stride) {
-      const r = ranges[i]
-      if (clamp && !(r >= range_min && r <= range_max)) continue
-      let x, y
-      if (cos && sin) {
-        x = r * cos[i]
-        y = r * sin[i]
-      } else {
-        const a = angles[i]
-        x = r * Math.cos(a)
-        y = r * Math.sin(a)
-      }
-      xy[k++] = x
-      xy[k++] = y
-    }
-    return k === xy.length ? xy : xy.subarray(0, k)
-  }
-
-  let cachedAngles = null
-  let cachedCos = null
-  let cachedSin = null
-  let lastAnglesKey = ''
-  function getAnglesAndMaybePrecompute(raw) {
-    if (raw.angles && raw.angles.length === raw.ranges.length) {
-      const a = raw.angles
-      const key = `${a.length}:${a[0]?.toFixed?.(6)}:${a[a.length - 1]?.toFixed?.(6)}`
-      if (key !== lastAnglesKey) {
-        const { cos, sin } = precomputeCosSin(a)
-        cachedAngles = a
-        cachedCos = cos
-        cachedSin = sin
-        lastAnglesKey = key
-      }
-      return { angles: cachedAngles, cos: cachedCos, sin: cachedSin }
-    }
-    if (raw.angle_increment === 0) return { angles: null, cos: null, sin: null }
-    if (!cachedAngles || cachedAngles.length !== raw.ranges.length) {
-      cachedAngles = makeAngles(raw.angle_min, raw.angle_increment, raw.ranges.length)
-      const pcs = precomputeCosSin(cachedAngles)
-      cachedCos = pcs.cos
-      cachedSin = pcs.sin
-      lastAnglesKey = `${cachedAngles.length}:${cachedAngles[0]?.toFixed?.(6)}:${cachedAngles[cachedAngles.length - 1]?.toFixed?.(6)}`
-    }
-    return { angles: cachedAngles, cos: cachedCos, sin: cachedSin }
-  }
-
-  // ──────────────────────────────────────────────────────────────
-  // 4) 스트리밍 상태(배치/다운샘플)
-  // ──────────────────────────────────────────────────────────────
-  let poseIdx = 0
-  let poseLastKept = -Infinity
-  let poseBatch = []
-
-  let pathStrideK = 0
-  let pathBatch = []
-
-  let lidarLastKept = -Infinity
-  let lidarBatch = []
-
-  let costmapLastKept = -Infinity
-  let costmapBatch = []
-
-  let goalLastKept = -Infinity
-  let goalBatch = []
-
-  let logCnt = 0
-  let logBatch = []
-
-  let gridDone = false
-
-  // ──────────────────────────────────────────────────────────────
-  // 5) handlers 구성(토픽별 fan-out)
-  // ──────────────────────────────────────────────────────────────
-  const handlers = {}
-
-  if (poseChosen) {
-    handlers[poseChosen] = async ({ msg, ch }) => {
-      // stride downsample
-      if (poseDownsample > 1 && poseIdx++ % poseDownsample !== 0) return
-
-      const tSec = nsToSec(msg.logTime ?? msg.publishTime)
-      if (!Number.isFinite(tSec)) return
-
-      // time downsample
-      if (poseTimeDownsampleMs > 0 && poseLastKept > -Infinity) {
-        if ((tSec - poseLastKept) * 1000 < poseTimeDownsampleMs) return
-      }
-      poseLastKept = tSec
-
-      const obj = await decodeMsgToObject(msg, ch, schemaResolver, { tryUtf8Json: true })
-      const pose = obj ? pickPoseAny(obj) : null
-      if (!pose) return
-
-      poseBatch.push({ tSec, x: pose.x, y: pose.y, z: Number(pose.z) || 0, yaw: Number(pose.yaw) || 0 })
-
-      if (poseBatch.length >= poseBatchSize) {
-        onPoseBatch?.(poseBatch)
-        poseBatch = []
-        await Promise.resolve()
-      }
-    }
-  }
-
-  if (pathChosen) {
-    handlers[pathChosen] = async ({ msg, ch }) => {
-      const msgSec = nsToSec(msg.logTime ?? msg.publishTime)
-      const obj = await decodeMsgToObject(msg, ch, schemaResolver, { tryUtf8Json: true })
-      if (!obj) return
-      const pts = extractPathPointsAny(obj)
-      if (!pts.length) return
-
-      for (const p of pts) {
-        if (pathStride > 1 && pathStrideK++ % pathStride !== 0) continue
-        pathBatch.push({ tSec: msgSec, x: p.x, y: p.y, z: p.z })
-        if (pathBatch.length >= pathBatchSize) {
-          onPathBatch?.(pathBatch)
-          pathBatch = []
-          await Promise.resolve()
-        }
-      }
-    }
-  }
-
-  if (lidarChosen) {
-    handlers[lidarChosen] = async ({ msg, ch }) => {
-      const tSec = nsToSec(msg.logTime ?? msg.publishTime)
-      if (!Number.isFinite(tSec)) return
-
-      if (lidarTimeDownsampleMs > 0 && lidarLastKept > -Infinity) {
-        if ((tSec - lidarLastKept) * 1000 < lidarTimeDownsampleMs) return
-      }
-      lidarLastKept = tSec
-
-      const obj = await decodeMsgToObject(msg, ch, schemaResolver, { tryUtf8Json: true })
-      const raw = normalizeRawScan(obj)
-      if (!raw) return
-
-      const { angles, cos, sin } = getAnglesAndMaybePrecompute(raw)
-      if (!angles) return
-
-      const xy = toXYFast({
-        ranges: raw.ranges,
-        angles,
-        cos,
-        sin,
-        range_min: raw.range_min,
-        range_max: raw.range_max,
-        stride: Math.max(1, lidarPointDownsample | 0),
-        clamp: !!lidarClampToRange
+      const obj = await decodeMsgToObject(msg, ch, schemaResolver, {
+        decoder,
+        tryUtf8Json: true
       })
 
-      lidarBatch.push({ tSec, xy, count: xy.length / 2, frameId: raw.frame_id })
-
-      if (lidarBatch.length >= lidarBatchSize) {
-        onLidarBatch?.(lidarBatch)
-        lidarBatch = []
-        await Promise.resolve()
+      let level = 'INFO',
+        text = ''
+      if (obj && typeof obj === 'object') {
+        level = normalizeLevelText(obj.level ?? obj.severity ?? 'INFO')
+        const name = obj.name || obj.node_name || ''
+        const msgText = obj.msg || obj.message || ''
+        text = `[${level}] ${formatLocal(nsToSec(timeNs))} ${name}: ${msgText}`
+      } else {
+        try {
+          text = textDecoder.decode(msg.data)
+        } catch {
+          text = `(binary ${msg.data?.byteLength ?? 0}B)`
+        }
       }
+
+      entries.push({ tSec, epochMs, level, text })
+      batch.push(entries[entries.length - 1])
+      count++
+
+      if (onBatch && batch.length >= batchSize) {
+        onBatch(batch)
+        batch = []
+      }
+      if ((count & 0x3ff) === 0) await Promise.resolve()
+      if (count >= maxLines) break
     }
+  } catch (e) {
+    console.warn('[ROSOUT] readMessages failed:', e)
   }
 
-  if (costmapChosen) {
-    handlers[costmapChosen] = async ({ msg, ch }) => {
-      const msgSec = nsToSec(msg.logTime ?? msg.publishTime)
-      if (!Number.isFinite(msgSec)) return
-
-      if (costmapTimeDownsampleMs > 0 && costmapLastKept > -Infinity) {
-        if ((msgSec - costmapLastKept) * 1000 < costmapTimeDownsampleMs) return
-      }
-      costmapLastKept = msgSec
-
-      const dec = await getDecoderForChannel(ch)
-      const obj = await decodeMsgToObject(msg, ch, schemaResolver, { decoder: dec, tryUtf8Json: true })
-      const grid = obj ? normalizeOccupancyGrid(obj) : null
-      if (!grid) return
-
-      const tHeader = stampToSec(obj?.header?.stamp) ?? stampToSec(obj?.info?.header?.stamp)
-      const tSec =
-        costmapTimeSource === 'header'
-          ? Number.isFinite(tHeader)
-            ? tHeader
-            : msgSec
-          : Number.isFinite(msgSec)
-            ? msgSec
-            : tHeader
-
-      if (!Number.isFinite(tSec)) return
-
-      costmapBatch.push({ tSec, grid })
-
-      if (costmapBatch.length >= costmapBatchSize) {
-        onCostmapBatch?.(costmapBatch)
-        costmapBatch = []
-        await Promise.resolve()
-      }
-    }
-  }
-
-  if (goalChosen) {
-    handlers[goalChosen] = async ({ msg, ch }) => {
-      const msgSec = nsToSec(msg.logTime ?? msg.publishTime)
-      if (!Number.isFinite(msgSec)) return
-
-      if (goalTimeDownsampleMs > 0 && goalLastKept > -Infinity) {
-        if ((msgSec - goalLastKept) * 1000 < goalTimeDownsampleMs) return
-      }
-      goalLastKept = msgSec
-
-      const obj = await decodeMsgToObject(msg, ch, schemaResolver, { tryUtf8Json: true })
-      if (!obj) return
-      const pose = pickPose2dStamped(obj)
-      if (!pose) return
-
-      const tHeader = stampOrMsgToSec(obj, msgSec)
-      const tSec =
-        goalTimeSource === 'header'
-          ? Number.isFinite(tHeader)
-            ? tHeader
-            : msgSec
-          : Number.isFinite(msgSec)
-            ? msgSec
-            : tHeader
-
-      if (!Number.isFinite(tSec)) return
-
-      const frame_id =
-        String(obj?.header?.frame_id ?? obj?.pose?.header?.frame_id ?? obj?.goal?.header?.frame_id ?? '') || undefined
-
-      goalBatch.push({ tSec, x: pose.x, y: pose.y, z: Number(pose.z) || 0, yaw: Number(pose.yaw) || 0, frame_id })
-
-      if (goalBatch.length >= goalBatchSize) {
-        onGoalBatch?.(goalBatch)
-        goalBatch = []
-        await Promise.resolve()
-      }
-    }
-  }
-
-  if (rosoutChosen) {
-    handlers[rosoutChosen] = async ({ msg, ch }) => {
-      if (logCnt >= logMaxLines) return
-      logCnt++
-
-      let line = null
-      try {
-        const pretty = await tryDecodePayload(msg.data, ch, schemaResolver)
-        if (pretty) line = typeof pretty === 'string' ? pretty : JSON.stringify(pretty)
-      } catch {}
-
-      if (!line) {
-        const tsStr = formatLocal(nsToSec(msg.logTime ?? msg.publishTime))
-        const node = ch?.topic ?? rosoutChosen
-        const size = msg.data?.byteLength ?? 0
-        line = `[INFO] ${tsStr} ${node}: (payload ${size} bytes)`
-      }
-
-      logBatch.push(line)
-      if (logBatch.length >= logBatchSize) {
-        onLogBatch?.(logBatch)
-        logBatch = []
-        await Promise.resolve()
-      }
-    }
-  }
-
-  if (gridChosen) {
-    handlers[gridChosen] = async ({ msg, ch }) => {
-      if (gridDone) return
-      const dec = await getDecoderForChannel(ch)
-      const obj = await decodeMsgToObject(msg, ch, schemaResolver, { decoder: dec, tryUtf8Json: true })
-      const grid = obj ? normalizeOccupancyGrid(obj) : null
-      if (!grid) return
-      gridDone = true
-      onGridOnce?.(grid)
-    }
-  }
-
-  // ──────────────────────────────────────────────────────────────
-  // 6) ✅ 단 1회 readMessages로 전체 처리
-  // ──────────────────────────────────────────────────────────────
-  await scanMcapOnce(url, { topics, decompressHandlers, handlers })
-
-  // flush remain
-  if (poseBatch.length) onPoseBatch?.(poseBatch)
-  if (pathBatch.length) onPathBatch?.(pathBatch)
-  if (lidarBatch.length) onLidarBatch?.(lidarBatch)
-  if (costmapBatch.length) onCostmapBatch?.(costmapBatch)
-  if (goalBatch.length) onGoalBatch?.(goalBatch)
-  if (logBatch.length) onLogBatch?.(logBatch)
+  if (onBatch && batch.length) onBatch(batch)
+  entries.sort((a, b) => a.tSec - b.tSec)
+  console.log(`[ROSOUT] done: entries=${entries.length}`)
+  return { found: entries.length > 0, entries, topic: chosen }
 }

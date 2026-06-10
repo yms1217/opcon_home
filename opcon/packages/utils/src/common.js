@@ -76,3 +76,48 @@ export const generateUuid36 = () => {
     s4()
   ).toLowerCase()
 }
+
+/**
+ * 조직 데이터를 표준 포맷으로 변환
+ * @param {Object} org 원본 데이터
+ * @param {string} type 데이터 유형 ('GROUP', 'SITE', 'ORGANIZATION')
+ * @param {string|number} parent 최상위 부모 데이터 (GROUP인 경우 사용)
+ * @returns {Object} 표준 포맷 데이터
+ */
+export const standardizeOrganization = (org, type = 'ORGANIZATION', parent = null) => {
+  if (type === 'GROUP') {
+    return {
+      code: org.groupId,
+      displayName: org.groupName,
+      originalType: 'GROUP',
+      originalData: org
+    }
+  } else if (type === 'SITE') {
+    return {
+      code: org.siteId,
+      parentCode: parent?.code,
+      displayName: org.siteName,
+      originalType: 'SITE',
+      originalData: org
+    }
+  } else if (type === 'COMPANY') {
+    return {
+      id: org.id || parent?.id,
+      code: 'default',
+      parentCode: null,
+      displayName: org.displayName || 'Company',
+      originalType: 'COMPANY'
+    }
+  } else {
+    // Default OTA ORGANIZATION
+    return {
+      id: org.id,
+      code: org.code,
+      parentCode: parent?.code,
+      displayName: org.displayName,
+      roleName: org.roleName,
+      originalType: 'ORGANIZATION',
+      originalData: org
+    }
+  }
+}

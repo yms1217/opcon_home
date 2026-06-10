@@ -1,5 +1,5 @@
 /*global kakao*/
-import React, { useEffect } from 'react'
+import React, { useEffect, useState } from 'react'
 import styled from 'styled-components'
 
 export const DivMap = styled.div`
@@ -10,14 +10,12 @@ export const DivMap = styled.div`
 }
 `
 
-const Location = () => {
-  const markers = [
-    // 예시 좌표들: (위도, 경도, 타이틀)
-    { lat: 37.5634975, lng: 126.8302334, title: 'LG 사이언스파크' },
-    { lat: 37.4977927, lng: 127.0504018, title: '역삼래미안아파트' }
-  ]
-  const centerLat = markers[0]?.lat ?? 37.5665
-  const centerLng = markers[0]?.lng ?? 126.978
+const Location = ({ markers }) => {
+  // let markers = [
+  //   // 예시 좌표들: (위도, 경도, 타이틀)
+  //   { lat: 37.571442, lng: 126.978578, title: '청계천' },
+  //   { lat: 37.4977927, lng: 127.0504018, title: '역삼래미안아파트' }
+  // ]
 
   const handleResize = (sidebarClick) => {
     const mapDiv = document.getElementById('map')
@@ -46,23 +44,37 @@ const Location = () => {
   }
 
   useEffect(() => {
-    var container = document.getElementById('map')
-    var options = {
-      center: new kakao.maps.LatLng(centerLat, centerLng),
-      level: 9
-    }
+    if (markers.length > 0) {
+      const centerLat = markers[0]?.lat ?? 37.5665
+      const centerLng = markers[0]?.lng ?? 126.978
+      var container = document.getElementById('map')
+      var options = {
+        center: new kakao.maps.LatLng(centerLat, centerLng),
+        level: 9
+      }
 
-    var map = new window.kakao.maps.Map(container, options)
-    markers.forEach((m) => {
-      const markerPosition = new window.kakao.maps.LatLng(m.lat, m.lng)
+      var map = new window.kakao.maps.Map(container, options)
+      markers.forEach((m) => {
+        const markerPosition = new window.kakao.maps.LatLng(m.lat, m.lng)
 
-      const marker = new window.kakao.maps.Marker({
-        position: markerPosition,
-        title: m.title
+        const marker = new window.kakao.maps.Marker({
+          position: markerPosition,
+          title: m.title
+        })
+
+        marker.setMap(map)
       })
+    } else {
+      const centerLat = 37.5665
+      const centerLng = 126.978
+      var container = document.getElementById('map')
+      var options = {
+        center: new kakao.maps.LatLng(centerLat, centerLng),
+        level: 9
+      }
 
-      marker.setMap(map)
-    })
+      var map = new window.kakao.maps.Map(container, options)
+    }
 
     const eventBtn = document.querySelector('.hideOnMobile')
     eventBtn.addEventListener('click', () => {
@@ -76,7 +88,7 @@ const Location = () => {
     return () => {
       window.removeEventListener('resize', handleResize)
     }
-  }, [])
+  }, [markers])
 
   return (
     <DivMap>

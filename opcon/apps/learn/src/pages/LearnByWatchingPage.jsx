@@ -43,7 +43,7 @@ const StepTitle = styled.h3`
 `
 
 const METADATA_FIELDS = [
-  { key: 'taskName', label: 'Task명', required: true, placeholder: '예: 신발 정리' },
+  { key: 'taskName', label: 'Task명', required: true, placeholder: '예: 자제 팔레타이징' },
   { key: 'videoCount', label: '영상 수', type: 'number', placeholder: '0' },
   {
     key: 'format',

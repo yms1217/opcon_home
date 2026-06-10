@@ -36,15 +36,16 @@ export default defineConfig(({ mode }) => {
     ],
     base: '/learning/',
     server: {
-      port: 5176,
+      port: 5180,
       hmr: {
         clientPort: 5173
       }
     },
     preview: {
-      port: 4176
+      port: 4180
     },
     build: {
+      target: 'esnext',          // ← 이 줄 추가
       outDir: '../../apps-dist/learning',
       emptyOutDir: false
     },

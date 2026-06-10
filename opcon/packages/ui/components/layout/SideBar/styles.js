@@ -2,7 +2,7 @@ import styled from 'styled-components'
 
 export const StyledGnb = styled.nav`
   height: 100%;
-  padding: 0.5rem;
+  // padding: 0.5rem;
   background: var(--color-secondary-15);
   display: flex;
   flex-direction: column;
@@ -17,7 +17,7 @@ export const StyledGnbItem = styled.li`
   position: relative;
 
   &:not(:last-of-type) {
-    margin-bottom: 1.6rem;
+    // margin-bottom: 0.5rem;
   }
 
   &:hover > .gnbTooltip {

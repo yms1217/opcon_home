@@ -7,7 +7,7 @@ const gnbButtonStyles = css`
   gap: 0.6rem;
   width: 100%;
   padding: 1.4rem;
-  border-radius: var(--radius-lg);
+  // border-radius: var(--radius-lg);
   color: var(--color-neutral-70);
 
   &:hover {
@@ -23,6 +23,14 @@ const gnbButtonStyles = css`
     letter-spacing: -0.05em;
     background: var(--color-neutral-10);
     color: var(--color-neutral-90);
+  }
+
+  @media all and (max-width: 767px) {
+    padding: 1rem 1.4rem;
+
+    svg {
+      display: none;
+    }
   }
 `
 

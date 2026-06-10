@@ -4,25 +4,26 @@ import {
   SectionRobot,
   Title,
   Table,
-  NoData,
-  Dropdown,
   Search,
   HeaderTitleGroup,
-  Button
+  OrganizationSelector,
+  SearchContainer,
+  Dropdown
 } from '@repo/ui'
-import { P, SearchContainer } from './styles'
+import { P } from './styles'
 import { useTranslation } from 'react-i18next'
 import { deviceApis, groupApis, siteApis } from '@/apis'
 import { toYmdHmKST } from '@/utils/dateUtils'
-import ButtonRun from './ButtonRun'
 import { useModalState } from '@repo/hooks'
 import ModalModifyRobot from './modal/ModalModifyRobot'
 import ModalResult from './modal/ModalResult'
 import { useNavigate } from 'react-router-dom'
 import '../../index.css'
-import { GroupSiteFilter, UNREGISTERED } from '../../common/GroupSiteFilter'
-import { AppProvider, useAppContext } from '@/common/AppContext'
-import { X } from 'lucide-react'
+import { useAppContext } from '@/common/AppContext'
+import { getStatusInfo, allRegStatus, allOperationStatus } from '@/utils/robotUtils'
+import { robotStore } from '@/utils/robotStore'
+
+const ALLVALUE = 'all'
 
 const Management = () => {
   const [refreshKey, setRefreshKey] = useState(0)
@@ -34,13 +35,17 @@ const Management = () => {
   const [deviceName, setDeviceName] = useState('')
   const [deviceNameModResult, setDeviceNameModResult] = useState(false)
   const navigate = useNavigate()
-  //const [groups, setGourps] = useState([])
-  //const [sites, setSites] = useState([])
   const [groupsSites, setGroupsSites] = useState([])
   const { selectedGroup, selectedSite } = useAppContext()
+  const [orgFilter, setOrgFilter] = useState({ values: ['all', 'all'] })
 
-  const [registrationStatusFilter, setRegistrationStatusFilter] = useState('')
-  const [operationStatusFilter, setOperationStatusFilter] = useState('')
+  const [registrationStatusFilter, setRegistrationStatusFilter] = useState(ALLVALUE)
+  const [operationStatusFilter, setOperationStatusFilter] = useState(ALLVALUE)
+  const { deviceState, setDeviceState } = robotStore.getState()
+
+  const handleSelectOrg = useCallback((info) => {
+    setOrgFilter(info)
+  }, [])
 
   function setTableList(tList) {
     let loopList = []
@@ -98,7 +103,11 @@ const Management = () => {
       const data = await deviceApis.getDevices()
       //console.info('data :', data)
       setDevices(data.content)
-      setTableList(data.content)
+
+      if (deviceState != 'none') {
+        setOperationStatusFilter(deviceState)
+        setDeviceState('none')
+      }
     } catch (err) {
       console.error('Error loadGetDevices:', err)
     } finally {
@@ -106,57 +115,8 @@ const Management = () => {
   }, [])
 
   useEffect(() => {
-    loadGetGroupsSites()
-  }, [])
-
-  useEffect(() => {
     loadGetDevices()
   }, [loadGetDevices, refreshKey])
-
-  function getStatusBadge(status) {
-    let className = ''
-    let text = ''
-    switch (status) {
-      case 'OPERATION':
-        className = 'bg-[#dbeafe] text-[#2563eb]'
-        text = t('operation')
-        break
-      case 'WAIT':
-        className = 'bg-[#f3f4f6] text-[#6b7280]'
-        text = t('wait')
-        break
-      case 'CHARGE':
-        className = 'bg-[#d1fae5] text-[#059669]'
-        text = t('charge')
-        break
-      case 'ERROR':
-        className = 'bg-[#fee2e2] text-[#dc2626]'
-        text = t('error')
-        break
-      case 'OFFLINE':
-        className = 'bg-[#fef3c7] text-[#d97706]'
-        text = t('offline')
-        break
-      case 'REGISTERED':
-        className = 'bg-[#f3f4f6] text-[#6b7280]'
-        text = t('register')
-        break
-      case 'ACTIVE':
-        className = 'bg-[#d1fae5] text-[#059669]'
-        text = t('active')
-        break
-      case 'DELETE':
-        className = 'bg-[#fee2e2] text-[#dc2626]'
-        text = t('delete')
-        break
-      default:
-        className = 'bg-[#ede9fe] text-[#6d28d9]'
-        text = t('noData')
-        break
-    }
-
-    return <span className={`px-4 py-[3px] rounded-full text-[10px] ${className}`}>{text}</span>
-  }
 
   const columeData = () => {
     return {
@@ -164,7 +124,7 @@ const Management = () => {
         {
           name: t('robotName'),
           selector: (row) =>
-            row.deviceStatus === 'DELETED' ? (
+            row.deviceRegStatus === 'DELETED' ? (
               row.deviceName
             ) : (
               <a style={{ cursor: 'pointer' }} onClick={() => openModalModifyRobot(row.deviceId, row.deviceName)}>
@@ -175,19 +135,25 @@ const Management = () => {
         },
         {
           name: t('model'),
-          selector: (row) => <P>{'RX-200'}</P>,
+          selector: (row) => <P>{row.deviceModelName ?? 'no model'}</P>,
           sortable: true
         },
         {
           name: t('registerStatus'),
           selector: (row) => row.deviceRegStatus ?? '', // 정렬용 원시값
-          cell: (row) => getStatusBadge(row.deviceRegStatus ?? ''),
+          cell: (row) => {
+            const { className, textKey } = getStatusInfo(row.deviceRegStatus ?? '')
+            return <span className={`px-4 py-[3px] rounded-full text-[10px] ${className}`}>{t(textKey)}</span>
+          },
           sortable: true
         },
         {
           name: t('operateStatus'),
-          selector: (row) => row.deviceStatus ?? '', // 정렬용 원시값
-          cell: (row) => getStatusBadge(row.deviceStatus ?? ''),
+          selector: (row) => row.deviceState ?? '', // 정렬용 원시값
+          cell: (row) => {
+            const { className, textKey } = getStatusInfo(row.deviceState ?? '')
+            return <span className={`px-4 py-[3px] rounded-full text-[10px] ${className}`}>{t(textKey)}</span>
+          },
           sortable: true
         },
         {
@@ -227,27 +193,9 @@ const Management = () => {
   const handleSearchChange = (e) => {
     setSearchQuery(e.target.value)
   }
-  const handleSearchKeyPress = (e) => {
-    if (e.key === 'Enter') {
-      filterTableList()
-    }
-  }
-
-  const handleBtnClick = () => {
-    filterTableList()
-  }
 
   const handleResetClick = () => {
     setSearchQuery('')
-  }
-
-  function setSearchDevices() {
-    const filteredList = devices.filter((item) =>
-      item.deviceName ? item.deviceName.toLowerCase().includes(searchQuery.toLowerCase()) : false
-    )
-    setTableList(filteredList)
-
-    console.info('selectedGroup :', selectedGroup)
   }
 
   const ModifyRobotModal = useModalState()
@@ -272,39 +220,24 @@ const Management = () => {
     setRefreshKey((k) => k + 1)
   }
 
-  const registrationStatusFilters = ['REGISTERED', 'ACTIVE', 'DELETE']
-  const operationStatusFilters = ['WAIT', 'CHARGE', 'OPERATION', 'OFFLINE', 'ERROR']
-
-  const registrationStatusTranslation = {
-    REGISTERED: t('register'),
-    ACTIVE: t('active'),
-    DELETE: t('delete')
-  }
-
-  const operationStatusTranslation = {
-    WAIT: t('wait'),
-    CHARGE: t('charge'),
-    OPERATION: t('operation'),
-    OFFLINE: t('offline'),
-    ERROR: t('error')
-  }
-
   useEffect(() => {
     filterTableList()
-  }, [selectedGroup, selectedSite, searchQuery, registrationStatusFilter, operationStatusFilter])
+  }, [devices, orgFilter, searchQuery, registrationStatusFilter, operationStatusFilter])
 
   function filterTableList() {
     const filteredList = devices.filter((r) => {
-      const matchGroup = !selectedGroup
-        ? true
-        : selectedGroup === UNREGISTERED
-          ? !r.assign?.groupName
-          : r.assign?.groupName === selectedGroup
-      const matchSite = !selectedSite
-        ? true
-        : selectedSite === UNREGISTERED
-          ? !r.assign?.siteName
-          : r.assign?.siteName === selectedSite
+      const matchGroup =
+        orgFilter.values[0] === 'all'
+          ? true
+          : orgFilter.values[0] === 'none'
+            ? !r.assign?.groupId
+            : r.assign?.groupId === orgFilter.values[0]
+      const matchSite =
+        orgFilter.values[1] === 'all'
+          ? true
+          : orgFilter.values[1] === 'none'
+            ? !r.assign?.siteId
+            : r.assign?.siteId === orgFilter.values[1]
 
       const lowerQuery = searchQuery?.toLowerCase()
       const matchSearch =
@@ -313,8 +246,9 @@ const Management = () => {
           .filter(Boolean)
           .some((v) => v.toLowerCase().includes(lowerQuery))
 
-      const matchRegistrationStatus = !registrationStatusFilter || r.deviceRegStatus === registrationStatusFilter
-      const matchOperationStatus = !operationStatusFilter || r.deviceState === operationStatusFilter
+      const matchRegistrationStatus =
+        registrationStatusFilter === ALLVALUE || r.deviceRegStatus === registrationStatusFilter
+      const matchOperationStatus = operationStatusFilter === ALLVALUE || r.deviceState === operationStatusFilter
 
       return matchGroup && matchSite && matchSearch && matchRegistrationStatus && matchOperationStatus
     })
@@ -322,101 +256,64 @@ const Management = () => {
     setTableList(filteredList)
   }
 
+  const regStatusOptions = useMemo(() => {
+    return [
+      { value: ALLVALUE, name: t('allRegisterStatus') },
+      ...allRegStatus.map((r) => ({ value: r.value, name: t(r.token) }))
+    ]
+  }, [allRegStatus, t])
+
+  const handleRegStatusChange = (value) => {
+    setRegistrationStatusFilter(value)
+  }
+
+  const operationStatusOptions = useMemo(() => {
+    return [
+      { value: ALLVALUE, name: t('allOperationStatus') },
+      ...allOperationStatus.map((r) => ({ value: r.value, name: t(r.token) }))
+    ]
+  }, [allRegStatus, t])
+
+  const handleOperationStatusChange = (value) => {
+    setOperationStatusFilter(value)
+  }
+
   return (
     <>
       <StyledPageContent className="column">
         <Title>{t('robotList')}</Title>
+        <OrganizationSelector
+          onChange={handleSelectOrg}
+          supportAlls={[true, true]}
+          supportNone={[true, true]}
+          disableCenter
+        />
         <SectionRobot>
           <HeaderTitleGroup>
-            <GroupSiteFilter groups={groupsSites}>
-              <div className="relative flex-1 sm:flex-none">
-                <Search
-                  size={'xs'}
-                  value={searchQuery}
-                  onChange={handleSearchChange}
-                  //onKeyPress={handleSearchKeyPress}
-                  placeholder={t('robotNameSnMac')}
-                  //onClick={handleBtnClick}
-                  onReset={handleResetClick}
-                />
-              </div>
-
-              {/* Registration Status Filter */}
-              <div className="ml-5 flex flex-col gap-3">
-                <span className="text-[10px] text-[#999]">{t('registerStatus')}</span>
-                <div className="flex items-center gap-3 flex-wrap">
-                  {registrationStatusFilters.map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => {
-                        setRegistrationStatusFilter(registrationStatusFilter === s ? '' : s)
-                      }}
-                      style={{ borderRadius: '.25rem', color: registrationStatusFilter === s ? '#ffffff' : '#666' }}
-                      className={`px-2 py-[5px] text-[11px] border transition-colors ${
-                        registrationStatusFilter === s
-                          ? 'bg-[#1a8bc5] text-white border-[#1a8bc5]'
-                          : 'bg-white text-[#666] border-[#ddd] hover:bg-[#f0f0f0]'
-                      }`}
-                    >
-                      {registrationStatusTranslation[s]}
-                    </button>
-                  ))}
-                  {registrationStatusFilter && (
-                    <button
-                      onClick={() => setRegistrationStatusFilter('')}
-                      style={{ borderRadius: '.25rem' }}
-                      className="p-0.5 ml-0.5 hover:bg-gray-100"
-                    >
-                      <X className="w-5 h-5 text-[#999]" />
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Operation Status Filter */}
-              <div className="ml-5 flex flex-col gap-3">
-                <span className="text-[10px] text-[#999]">{t('operateStatus')}</span>
-                <div className="flex items-center gap-3 flex-wrap">
-                  {operationStatusFilters.map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => {
-                        setOperationStatusFilter(operationStatusFilter === s ? '' : s)
-                      }}
-                      style={{ borderRadius: '.25rem', color: operationStatusFilter === s ? '#ffffff' : '#666' }}
-                      className={`px-2 py-[5px] text-[11px] border transition-colors ${
-                        operationStatusFilter === s
-                          ? 'bg-[#1a8bc5] text-white border-[#1a8bc5]'
-                          : 'bg-white text-[#666] border-[#ddd] hover:bg-[#f0f0f0]'
-                      }`}
-                    >
-                      {operationStatusTranslation[s]}
-                    </button>
-                  ))}
-                  {operationStatusFilter && (
-                    <button
-                      onClick={() => setOperationStatusFilter('')}
-                      style={{ borderRadius: '.25rem' }}
-                      className="p-0.5 ml-0.5 hover:bg-gray-100"
-                    >
-                      <X className="w-5 h-5 text-[#999]" />
-                    </button>
-                  )}
-                </div>
-              </div>
-            </GroupSiteFilter>
-            {/* <SearchContainer>
+            <SearchContainer>
               <Search
                 value={searchQuery}
                 onChange={handleSearchChange}
-                onKeyPress={handleSearchKeyPress}
-                placeholder={t('robotNameSearch')}
-                onClick={handleBtnClick}
                 onReset={handleResetClick}
+                placeholder={t('robotNameSnMac')}
               />
-            </SearchContainer> */}
+            </SearchContainer>
+            <Dropdown
+              size="lg"
+              minWidth="180px"
+              defaultValue={registrationStatusFilter}
+              options={regStatusOptions}
+              onChange={handleRegStatusChange}
+            />
+            <Dropdown
+              size="lg"
+              minWidth="180px"
+              value={operationStatusFilter}
+              options={operationStatusOptions}
+              onChange={handleOperationStatusChange}
+            />
           </HeaderTitleGroup>
-          <div style={{ margin: '5px 0 14px 0', fontSize: '14px', fontWeight: 'bold' }}>
+          <div style={{ margin: '16px 0', fontSize: '14px', fontWeight: 'bold' }}>
             {t('count')} : {filteredDevices.length}
           </div>
           <Table
@@ -451,4 +348,3 @@ const Management = () => {
 }
 
 export default Management
-

@@ -60,11 +60,16 @@ const LeftMapCard = memo(function LeftMapCard({
   localCostmapFrames,
   dwaGoals,
   currentTimestampMs,
-  t0EpochMs
+  t0EpochMs,
+
+  // ✅ [ADD] odom(=pose) 기반 센서 차트 데이터
+  odomChart1,
+  odomChart2,
+  chartLoading
 }) {
   const [legendOpen, setLegendOpen] = useState(true)
   const [is3D, setIs3D] = useState(false)
-
+  const hasGrid = !!gridData
   // 좌측 오버레이 정책: init/error는 명시적으로 오버레이,
   // 그 외엔 leftInteractiveReady가 될 때까지 오버레이 유지
   const showLeftOverlay = loadPhase === 'error' || loadPhase === 'init' || !leftInteractiveReady
@@ -107,7 +112,7 @@ const LeftMapCard = memo(function LeftMapCard({
             style={{
               position: 'absolute',
               inset: 0,
-              visibility: is3D ? 'hidden' : 'visible',
+              visibility: 'visible',
               pointerEvents: is3D ? 'none' : 'auto'
             }}
           >
@@ -115,7 +120,7 @@ const LeftMapCard = memo(function LeftMapCard({
               ref={canvasRef}
               style={{
                 ...S.mapImage,
-                visibility: leftInteractiveReady ? 'visible' : 'hidden'
+                visibility: leftInteractiveReady || hasGrid ? 'visible' : 'hidden'
               }}
               onMouseDown={onCanvasMouseDown}
             />
@@ -218,11 +223,19 @@ function MapPanels({
   lidarScans,
   localCostmapFrames,
   dwaGoals,
-  t0EpochMs
+  t0EpochMs,
+
+  odomChart1,
+  odomChart2,
+  chartLoading
 }) {
   // ===============================
   // 좌측 게이팅(기존 그대로)
   // ===============================
+
+  // ✅ playheadSec: 차트 x축(tSec)과 동일 단위
+  const playheadSec = typeof currentTimestampMs === 'number' ? currentTimestampMs / 1000 : null
+
   const LEFT_MIN_SAMPLES = 150
   const LEFT_MIN_SECONDS = 3.0
 
@@ -241,16 +254,20 @@ function MapPanels({
     return sampleOK || timeOK
   }, [leftHasPts, coveragePathPoints.length, leftDurSec])
 
-  const leftInteractiveReady = loadPhase === 'ready' && !isLoadingLogs && leftReadyByData
+  // ✅ Step1: grid만 있어도 2D 캔버스는 보여야 한다(경로 수집 전이라도)
+  const leftHasGrid = !!gridData
+
+  // ✅ 로그 로딩과 지도/플레이는 분리: 지도는 ready면 인터랙션 허용
+  const leftInteractiveReady = loadPhase === 'ready' && (leftReadyByData || leftHasGrid)
 
   const leftOverlayText = useMemo(() => {
     if (loadPhase === 'error') return '로딩 실패'
     if (loadPhase === 'init') return 'mcap 파일 선택 후 조회 버튼을 눌러주세요'
-    if (!leftHasPts) return '경로 수집 대기…'
-    if (isLoadingLogs || loadPhase !== 'ready') return 'MCAP 로딩 중…'
+    if (!leftHasPts && !leftHasGrid) return '경로 수집 대기…'
+    if (loadPhase !== 'ready') return 'MCAP 로딩 중…'
     if (!leftReadyByData) return '데이터 안정화 대기…'
     return ''
-  }, [loadPhase, isLoadingLogs, leftHasPts, leftReadyByData])
+  }, [loadPhase, leftHasPts, leftHasGrid, leftReadyByData])
 
   // ✅ (유지) 디폴트는 센서 정보로
   useEffect(() => {
@@ -261,14 +278,14 @@ function MapPanels({
   // ===============================
   // 우측 센서 차트 게이팅(좌측과 동일한 로딩 Sync)
   // ===============================
-  const rightInteractiveReady = loadPhase === 'ready' && !isLoadingLogs
+  const rightInteractiveReady = loadPhase === 'ready'
 
   const rightOverlayText = useMemo(() => {
     if (loadPhase === 'error') return '로딩 실패'
     if (loadPhase === 'init') return 'mcap 파일 선택 후 조회 버튼을 눌러주세요'
-    if (isLoadingLogs || loadPhase !== 'ready') return 'MCAP 로딩 중…'
+    if (loadPhase !== 'ready') return 'MCAP 로딩 중…'
     return ''
-  }, [loadPhase, isLoadingLogs])
+  }, [loadPhase])
 
   const showRightOverlay = loadPhase === 'error' || loadPhase === 'init' || !rightInteractiveReady
 
@@ -336,17 +353,49 @@ function MapPanels({
           {/* ✅ ready일 때만 차트 렌더 (uPlot이 0px에서 그려지는 문제 방지) */}
           {effectiveShowSensor ? (
             rightInteractiveReady ? (
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateRows: '220px 220px',
-                  gap: 12,
-                  width: '100%'
-                }}
-              >
-                <SensorChart sampleMode={true} />
-                <SensorChart sampleMode={true} />
-              </div>
+              chartLoading ? (
+                <div
+                  style={{
+                    width: '100%',
+                    height: 220 * 2 + 12,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#888',
+                    fontSize: 13
+                  }}
+                >
+                  차트 데이터 로딩 중...
+                </div>
+              ) : (
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateRows: '1fr 1fr',
+                    gap: 12,
+                    width: '100%'
+                  }}
+                >
+                  <SensorChart
+                    sampleMode={false}
+                    data={odomChart1}
+                    title="ODOM (derived) Velocity"
+                    labels={{ x: 'vx', y: 'vy', z: 'speed' }}
+                    colors={{ x: '#ef4444', y: '#3b82f6', z: '#10b981' }}
+                    playheadSec={playheadSec}
+                    t0EpochMs={t0EpochMs}
+                  />
+                  <SensorChart
+                    sampleMode={false}
+                    data={odomChart2}
+                    title="ODOM Pose"
+                    labels={{ x: 'x', y: 'y', z: 'yaw' }}
+                    colors={{ x: '#f97316', y: '#8b5cf6', z: '#111827' }}
+                    playheadSec={playheadSec}
+                    t0EpochMs={t0EpochMs}
+                  />
+                </div>
+              )
             ) : (
               // overlay가 덮을 거지만, 레이아웃 흔들림 방지용 빈 자리(선택)
               <div style={{ width: '100%', height: 220 * 2 + 12 }} />

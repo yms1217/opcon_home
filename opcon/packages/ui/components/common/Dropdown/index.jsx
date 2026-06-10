@@ -7,6 +7,7 @@ import { useResponsiveStore } from '@repo/stores/useResponsiveStore'
 import useContentsScrollListener from '@repo/hooks/useContentsScrollListener'
 import Checkbox from '../Checkbox'
 import TextFieldInfo from '../TextFieldInfo'
+import Search from '../Search'
 
 const optionHeight = 44
 const optionsBorderY = 2
@@ -24,6 +25,8 @@ const maxOptionsHeight = optionHeight * maxOptionsLength + optionsBorderY
  * @param {any} [props.value] - Controlled value
  * @param {Array<Object|string>} props.options - List of options
  * @param {React.ReactNode} [props.searchBarComponent] - Optional search bar component
+ * @param {boolean} [props.showSearch=false] - Whether to show internal search bar
+ * @param {string} [props.searchPlaceholder] - Placeholder for internal search bar
  * @param {'sm' | 'md' | 'lg'} [props.size='md'] - Dropdown size
  * @param {boolean} [props.useSelectedIcon=false] - Whether to show check icon for selected item
  * @param {boolean} [props.useCheckBox=false] - Whether to use checkboxes (multi-select)
@@ -39,6 +42,8 @@ const Dropdown = ({
   value,
   options,
   searchBarComponent,
+  showSearch = false,
+  searchPlaceholder = '검색어를 입력해 주세요.',
   size = 'md',
   useSelectedIcon = false,
   useCheckBox = false,
@@ -52,6 +57,7 @@ const Dropdown = ({
   const dropdownRef = useRef(null)
   const { windowHeight } = useResponsiveStore()
   const { state: isOpen, toggle, off: close } = useToggle(false)
+  const [searchKeyword, setSearchKeyword] = useState('')
 
   // Initialize with value if provided, or defaultValue as fallback
   const [selectedItems, setSelectedItems] = useState(() => {
@@ -69,6 +75,13 @@ const Dropdown = ({
       setSelectedItems(value)
     }
   }, [value])
+
+  // Reset search keyword when dropdown is closed
+  useEffect(() => {
+    if (!isOpen) {
+      setSearchKeyword('')
+    }
+  }, [isOpen])
 
   useClickOutSide(dropdownRef, close)
   useContentsScrollListener(isOpen && close)
@@ -120,7 +133,7 @@ const Dropdown = ({
       const selectedOption = options.find(
         (option) => option?.value === selectedItems || option?.name === selectedItems || option === selectedItems
       )
-      return selectedOption ? selectedOption.name || selectedOption : placeholder
+      return selectedOption ? (typeof selectedOption === 'object' ? (selectedOption?.name ?? '') : selectedOption) : placeholder
     }
 
     if (!selectedItems || selectedItems.length === 0) {
@@ -131,6 +144,15 @@ const Dropdown = ({
     }
     return `${selectedItems[0]} 외 ${selectedItems.length - 1}`
   }
+
+  const displayedOptions = showSearch
+    ? options.filter((option) => {
+        const name = typeof option === 'object' ? (option?.name ?? '') : (option ?? '')
+        const value = typeof option === 'object' ? (option?.value ?? option) : option
+        if (value === 'all' || value === 'none') return true
+        return String(name).toLowerCase().includes(String(searchKeyword).toLowerCase())
+      })
+    : options
 
   return (
     <StyledDropdown {...rest} ref={dropdownRef} $isOpen={isOpen} $size={size} $minWidth={minWidth}>
@@ -156,14 +178,25 @@ const Dropdown = ({
               windowHeight < dropdownRef.current.getBoundingClientRect().bottom + maxOptionsHeight + gap * 2
                 ? dropdownRef.current.getBoundingClientRect().top -
                   (gap + optionsBorderY) -
-                  optionHeight * (options.length > maxOptionsLength ? maxOptionsLength : options.length)
+                  optionHeight *
+                    (displayedOptions.length > maxOptionsLength ? maxOptionsLength : displayedOptions.length)
                 : dropdownRef.current.getBoundingClientRect().bottom + gap
             }
             $left={dropdownRef.current.getBoundingClientRect().left}
           >
-            {searchBarComponent && <li className="searchItem">{searchBarComponent}</li>}
-            {options.length > 0 ? (
-              options.map((option) => (
+            {showSearch && (
+              <li className="searchItem">
+                <Search
+                  value={searchKeyword}
+                  onChange={(e) => setSearchKeyword(e.target.value)}
+                  onReset={() => setSearchKeyword('')}
+                  placeholder={searchPlaceholder}
+                />
+              </li>
+            )}
+            {!showSearch && searchBarComponent && <li className="searchItem">{searchBarComponent}</li>}
+            {displayedOptions.length > 0 ? (
+              displayedOptions.map((option) => (
                 <li
                   key={option.value || option.id || option.name || option}
                   className={`typographyBody5 optionItem ${useCheckBox && 'useCheckbox'} ${
@@ -172,7 +205,7 @@ const Dropdown = ({
                 >
                   {useCheckBox ? (
                     <Checkbox
-                      label={option.name || option}
+                      label={typeof option === 'object' ? (option?.name ?? '') : option}
                       checked={selectedItems.includes(option)}
                       onChange={() => handleCheckboxChange(option)}
                     />
@@ -183,7 +216,7 @@ const Dropdown = ({
                       value={option}
                       onClick={() => handleItemClick(option)}
                     >
-                      {option.name || option}
+                      {typeof option === 'object' ? (option?.name ?? '') : option}
                       {useSelectedIcon && selectedItems === (option.value || option.name || option) && (
                         <Icon name="check" size={20} />
                       )}

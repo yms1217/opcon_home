@@ -1,9 +1,9 @@
-import koLogin from './ko/login.json'
-import enLogin from './en/login.json'
-import jaLogin from './ja/login.json'
+import koLogin from './ko-KR/login.json'
+import enLogin from './en-US/login.json'
+import jaLogin from './ja-JP/login.json'
 
 export const translations = {
-  ko: { login: koLogin },
-  en: { login: enLogin },
-  ja: { login: jaLogin }
+  'ko-KR': { login: koLogin },
+  'en-US': { login: enLogin },
+  'ja-JP': { login: jaLogin }
 }

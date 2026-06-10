@@ -55,3 +55,19 @@ export const putDeviceAssignment = async (deviceId, body) => {
   return response
 }
 
+/**
+ * 에러 리스트
+ * @returns {Promise<any>}
+ */
+export const getDeviceErrors = async (deviceId, params = undefined) => {
+  const size = GETSIZE
+
+  const response = await axiosRobot.get(pathDevices + '/' + deviceId + '/error', {
+    params: {
+      size,
+      ...(params ?? {}) // params가 있으면 추가
+    }
+  })
+  return response
+}
+

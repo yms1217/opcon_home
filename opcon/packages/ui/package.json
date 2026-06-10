@@ -22,6 +22,7 @@
     "@repo/stores": "workspace:*",
     "@repo/utils": "workspace:*",
     "@repo/constants": "workspace:*",
+    "@repo/apis": "workspace:*",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",

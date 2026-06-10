@@ -7,6 +7,7 @@ import { ClipLoader } from 'react-spinners'
 import { useSearchParams } from 'react-router-dom'
 import { useModalState } from '@repo/hooks'
 import ModalBasic from '../modal/ModalBasic'
+import { useUserStore } from '@repo/stores'
 import {
   LoginContainer,
   LoginBox,
@@ -99,6 +100,9 @@ function SetPassword() {
         setIsLoading(false)
         return
       }
+
+      const store = useUserStore.getState()
+      store.logout()
     } catch (error) {
       handlePassError(error.response?.data?.errorCode)
       setIsLoading(false)
