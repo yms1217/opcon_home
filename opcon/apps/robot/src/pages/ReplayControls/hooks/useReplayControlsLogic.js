@@ -2,7 +2,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fileApis } from '@/apis'
 import { toUtcFromLocalDateTime } from '@/utils/dateUtils'
-import { loadMcapTopicsAndSamplesFromArrayBuffer } from '../mcap/replayMcapTopicLoader'
+import { loadMcapTopicsAndSamplesFromUrl, loadJointStatesWindowFromUrl } from '../mcap/replayMcapTopicLoader'
+
 const lichtblickURL = import.meta.env.VITE_LICHTBLICK_BASE_URL
 
 const EMPTY_OPTION = { id: '__empty__', label: '파일 없음' }
@@ -29,6 +30,23 @@ function triggerAnchorDownload(href, fileName, openInNewTab = false) {
   document.body.appendChild(a)
   a.click()
   a.remove()
+}
+
+function mergeSamplesByTSec(baseArr, patchArr) {
+  const a = Array.isArray(baseArr) ? baseArr : []
+  const b = Array.isArray(patchArr) ? patchArr : []
+  if (a.length === 0) return b
+  if (b.length === 0) return a
+
+  const merged = [...a, ...b]
+  merged.sort((x, y) => (x?.tSec ?? 0) - (y?.tSec ?? 0))
+
+  for (let i = merged.length - 2; i >= 0; i--) {
+    if ((merged[i]?.tSec ?? 0) === (merged[i + 1]?.tSec ?? 0)) {
+      merged.splice(i, 1)
+    }
+  }
+  return merged
 }
 
 /**
@@ -65,7 +83,6 @@ export default function useReplayControlsLogic({ deviceId } = {}) {
   const [mcapParseError, setMcapParseError] = useState(null)
 
   // “읽기” 결과 저장 (추가 동작은 이후)
-  const selectedFileBytesRef = useRef(null) // ArrayBuffer
   const selectedFileMetaRef = useRef(null) // { id,label,createdAt,size,url }
 
   // 요청 가드(연속 클릭/언마운트 대비) — LogReplay에서 쓰던 방식과 동일 계열
@@ -265,42 +282,61 @@ export default function useReplayControlsLogic({ deviceId } = {}) {
     setMcapTopicSamples(null)
 
     try {
-      const url = await getPresignedUrl(selectedLogId)
-      if (!url) throw new Error('다운로드 URL이 설정되지 않았습니다.')
+      const downloadUrl = await getPresignedUrl(selectedLogId)
+      if (!downloadUrl) throw new Error('다운로드 URL이 설정되지 않았습니다.')
 
-      const resp = await fetch(url, { mode: 'cors' })
-      if (!resp.ok) throw new Error(`파일 읽기 실패: HTTP ${resp.status}`)
-      const buf = await resp.arrayBuffer()
+      selectedFileMetaRef.current = { ...selected, url: downloadUrl }
 
-      selectedFileBytesRef.current = buf
-      selectedFileMetaRef.current = { ...selected, url }
+      const { topics, stats, samples, timeRange, robotDescription } = await loadMcapTopicsAndSamplesFromUrl(
+        downloadUrl,
+        {
+          sampleTopics: [
+            '/joint_states',
+            '/hmc_ros2_control/diagnostic',
+            '/hmc_ros2_control/actuator_states',
+            '/tracking_controller/joint'
+          ],
+          samplePerTopic: 300,
+          maxScanMessages: 300000,
+          debug: true
+        }
+      )
 
-      // ✅ 토픽 + 샘플 raw 메시지(/joint_states) 읽기 + 콘솔 검증 로그
-      const { topics, stats, samples, timeRange } = await loadMcapTopicsAndSamplesFromArrayBuffer(buf, {
-        // ✅ System/Performance 실데이터 전환을 위한 샘플 토픽 확장
-        sampleTopics: [
-          '/joint_states',
-          '/hmc_ros2_control/diagnostic',
-          '/hmc_ros2_control/actuator_states',
-          '/tracking_controller/joint'
-          // 필요 시(다음 단계): '/tf', '/tf_static'
-        ],
-        samplePerTopic: 300, // ✅ 최소 120~300 추천(차트/분석용)
-        maxScanMessages: 300000,
-        debug: true
-      })
+      let nextSamples = samples || {}
+
+      // ✅ Step2: overview sparse + initial dense joint window(0~3초)
+      // - 기존 UI가 /joint_states를 "상세 샘플"처럼 쓰는 부분을 살리기 위한 최소 연결
+      try {
+        const jointWindow = await loadJointStatesWindowFromUrl(downloadUrl, {
+          topic: '/joint_states',
+          startSec: 0,
+          endSec: 3,
+          maxMessages: 800,
+          timeDownsampleMs: 0,
+          baseAbsStartSec: timeRange?.absStartSec ?? null
+        })
+
+        if (jointWindow?.samples?.length) {
+          nextSamples = {
+            ...nextSamples,
+            ['/joint_states']: mergeSamplesByTSec(nextSamples['/joint_states'], jointWindow.samples)
+          }
+        }
+      } catch (e) {
+        console.warn('[ReplayControls] initial joint window load failed:', e?.message || String(e))
+      }
 
       setMcapTopics(topics || [])
       setMcapTopicStats(stats || null)
-      setMcapTopicSamples(samples || null)
+      setMcapTopicSamples(nextSamples || null)
       setMcapTimeRange(timeRange || null)
 
-      console.log('joint_states samples len =', samples['/joint_states']?.length)
-      console.log('diagnostic samples len =', samples['/hmc_ros2_control/diagnostic']?.length)
-      console.log('actuator_states samples len =', samples['/hmc_ros2_control/actuator_states']?.length)
-      console.log('tracking_controller samples len =', samples['/tracking_controller/joint']?.length)
+      console.log('joint_states samples len =', nextSamples['/joint_states']?.length)
+      console.log('diagnostic samples len =', nextSamples['/hmc_ros2_control/diagnostic']?.length)
+      console.log('actuator_states samples len =', nextSamples['/hmc_ros2_control/actuator_states']?.length)
+      console.log('tracking_controller samples len =', nextSamples['/tracking_controller/joint']?.length)
 
-      return { meta: selectedFileMetaRef.current, bytes: buf }
+      return { meta: selectedFileMetaRef.current }
     } catch (e) {
       setReadError(e)
       setMcapParseError(e)
@@ -311,30 +347,30 @@ export default function useReplayControlsLogic({ deviceId } = {}) {
       setIsParsingMcap(false)
     }
   }, [selectedLogId, logOptions, getPresignedUrl])
-  
+
   // Lichtblick
   const handleOpenLichtblick = useCallback(async () => {
-    if (!selectedLogId || selectedLogId === EMPTY_OPTION.id) return;
+    if (!selectedLogId || selectedLogId === EMPTY_OPTION.id) return
 
-    const selected = logOptions.find((l) => l.id === selectedLogId);
-    if (!selected) return;
+    const selected = logOptions.find((l) => l.id === selectedLogId)
+    if (!selected) return
 
-    const downloadUrl = await getPresignedUrl(selectedLogId);
+    const downloadUrl = await getPresignedUrl(selectedLogId)
     if (!downloadUrl) {
-      alert("Logfile URL not found");
-      return;
+      alert('Logfile URL not found')
+      return
     }
-    const ds = "remote-file";
-    const u = new URL(lichtblickURL);
-    u.search = "";
-    u.searchParams.set("ds", ds);
-    u.searchParams.set("ds.url", downloadUrl);
-    u.searchParams.set("embed", "true")
-    u.searchParams.set("ui", "minimal")
-    const href = u.toString();
-    const popup = window.open(href, "_blank", "noopener,noreferrer");
-    if (popup) popup.opener = null;
-  }, [selectedLogId, logOptions, getPresignedUrl]);
+    const ds = 'remote-file'
+    const u = new URL(lichtblickURL)
+    u.search = ''
+    u.searchParams.set('ds', ds)
+    u.searchParams.set('ds.url', downloadUrl)
+    u.searchParams.set('embed', 'true')
+    u.searchParams.set('ui', 'minimal')
+    const href = u.toString()
+    const popup = window.open(href, '_blank', 'noopener,noreferrer')
+    if (popup) popup.opener = null
+  }, [selectedLogId, logOptions, getPresignedUrl])
 
   // ─────────────────────────────────────────────
   // (4) 다운로드 버튼: 선택 파일 다운로드
@@ -433,7 +469,6 @@ export default function useReplayControlsLogic({ deviceId } = {}) {
       handleVisibleRangeChange,
       allowedDateKeys,
       // (추후 확장용) 읽어온 파일 접근
-      selectedFileBytesRef,
       selectedFileMetaRef,
 
       // constants
