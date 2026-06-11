@@ -37,9 +37,9 @@ export default defineConfig(({ mode }) => {
     base: '/learning/',
     server: {
       port: 5180,
-      hmr: {
-        clientPort: 5173
-      }
+      // hmr: {
+      //   clientPort: 5173
+      // }
     },
     preview: {
       port: 4180

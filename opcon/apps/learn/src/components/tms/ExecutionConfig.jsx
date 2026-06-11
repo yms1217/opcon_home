@@ -1,6 +1,5 @@
-﻿import { useState, useEffect } from 'react'
 import styled from 'styled-components'
-import { getDevices } from '../../services/dmApi'
+import RobotSelectorPanel from '../common/RobotSelectorPanel'
 
 const Wrapper = styled.div`
   display: flex;
@@ -18,37 +17,6 @@ const SectionLabel = styled.label`
   font-size: 13px;
   font-weight: 600;
   color: var(--color-secondary-70, #555e72);
-`
-
-const RobotGrid = styled.div`
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 8px;
-`
-
-const RobotItem = styled.div`
-  padding: 12px 14px;
-  border-radius: 8px;
-  border: 2px solid ${({ $selected }) => ($selected ? '#4A90D9' : 'var(--color-secondary-20, #dadde2)')};
-  background: ${({ $selected }) => ($selected ? 'rgba(74,144,217,0.08)' : 'var(--color-neutral-10, #fff)')};
-  cursor: pointer;
-  transition: border-color 0.15s;
-
-  &:hover {
-    border-color: #4A90D9;
-  }
-`
-
-const RobotName = styled.div`
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-secondary-90, #262f44);
-`
-
-const RobotMeta = styled.div`
-  font-size: 11px;
-  color: var(--color-secondary-50, #848c9d);
-  margin-top: 3px;
 `
 
 const Row = styled.div`
@@ -112,35 +80,15 @@ const PURPOSE_OPTIONS = [
 ]
 
 export default function ExecutionConfig({ config, onChange }) {
-  const [robots, setRobots] = useState([])
-
-  useEffect(() => {
-    getDevices().then(setRobots)
-  }, [])
-
-  const toggleRobot = (id) => {
-    const ids = config.robotIds.includes(id)
-      ? config.robotIds.filter((r) => r !== id)
-      : [...config.robotIds, id]
-    onChange({ robotIds: ids })
-  }
-
   return (
     <Wrapper>
       <Section>
         <SectionLabel>수행 로봇 선택</SectionLabel>
-        <RobotGrid>
-          {robots.map((robot) => (
-            <RobotItem
-              key={robot.id}
-              $selected={config.robotIds.includes(robot.id)}
-              onClick={() => toggleRobot(robot.id)}
-            >
-              <RobotName>{robot.name}</RobotName>
-              <RobotMeta>{robot.model} · {robot.location}</RobotMeta>
-            </RobotItem>
-          ))}
-        </RobotGrid>
+        <RobotSelectorPanel
+          multi
+          value={config.robotIds}
+          onChange={(ids) => onChange({ robotIds: ids })}
+        />
       </Section>
 
       <Section>

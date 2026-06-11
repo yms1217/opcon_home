@@ -1,30 +1,37 @@
+import { robotClient, API_CONFIG } from '@repo/apis'
+
 const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
-const BASE = import.meta.env.VITE_API_BASE_URL || ''
+
+const axiosRobot = robotClient(import.meta.env.VITE_API_BASE_URL)
+
+const DEVICES_PATH = `${API_CONFIG.PREFIX_ROBOT}/devices`
 
 const MOCK_DEVICES = [
-  { id: 'robot-001', name: 'RSP-001', model: 'RSP-7', status: 'idle', location: '1F 창고' },
-  { id: 'robot-002', name: 'RSP-002', model: 'RSP-7', status: 'running', location: '2F 물류' },
-  { id: 'robot-003', name: 'RSP-003', model: 'RSP-9', status: 'idle', location: '3F 제조' },
-  { id: 'robot-004', name: 'RSP-004', model: 'RSP-9', status: 'offline', location: '1F 창고' },
+  { id: 'robot-001', name: 'RSP-001', model: 'RSP-7', status: 'STANDBY',   group: '물류팀', site: '1F 창고' },
+  { id: 'robot-002', name: 'RSP-002', model: 'RSP-7', status: 'OPERATION', group: '물류팀', site: '2F 물류' },
+  { id: 'robot-003', name: 'RSP-003', model: 'RSP-9', status: 'CHARGE',    group: '제조팀', site: '3F 제조' },
+  { id: 'robot-004', name: 'RSP-004', model: 'RSP-9', status: 'OFFLINE',   group: '제조팀', site: '1F 창고' },
 ]
 
-async function request(path, options = {}) {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  })
-  if (!res.ok) throw new Error(`DM API error: ${res.status}`)
-  return res.json()
-}
+const normalizeDevice = (d) => ({
+  id: d.deviceId,
+  name: d.deviceName || d.deviceSerialNumber || d.deviceId,
+  model: d.deviceModelName || '',
+  status: d.deviceState || '',
+  group: d.assign?.groupName || '',
+  site: d.assign?.siteName || '',
+})
 
 export const getDevices = async () => {
   if (USE_MOCK) return MOCK_DEVICES
-  return request('/devices')
+  const data = await axiosRobot.get(DEVICES_PATH, { params: { size: '100' } })
+  return (data?.content ?? []).map(normalizeDevice)
 }
 
 export const getDevice = async (id) => {
   if (USE_MOCK) return MOCK_DEVICES.find((d) => d.id === id) || null
-  return request(`/devices/${id}`)
+  const data = await axiosRobot.get(`${DEVICES_PATH}/${id}`)
+  return normalizeDevice(data)
 }
 
 export const getDeviceStatus = async (id) => {
@@ -32,12 +39,14 @@ export const getDeviceStatus = async (id) => {
     const device = MOCK_DEVICES.find((d) => d.id === id)
     return device ? { id, status: device.status } : null
   }
-  return request(`/devices/${id}/status`)
+  const data = await axiosRobot.get(`${DEVICES_PATH}/${id}`)
+  return { id: data.deviceId, status: data.deviceState || '' }
 }
 
+// POST /teleop-sessions — DM팀과 협의 필요한 신규 엔드포인트
 export const createTeleopSession = async (config) => {
   if (USE_MOCK) {
     return { id: `teleop-${Date.now()}`, ...config, createdAt: new Date().toISOString() }
   }
-  return request('/teleop-sessions', { method: 'POST', body: JSON.stringify(config) })
+  return axiosRobot.post('/teleop-sessions', config)
 }

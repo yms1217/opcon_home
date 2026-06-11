@@ -1,9 +1,10 @@
-﻿import { useState, useEffect } from 'react'
+﻿import { useState } from 'react'
 import styled from 'styled-components'
-import { getDevices, createTeleopSession } from '../services/dmApi'
+import { createTeleopSession } from '../services/dmApi'
 import { openForge } from '../services/forgeApi'
 import { useLearning } from '../context/LearningContext'
 import Card from '../components/common/Card'
+import RobotSelectorPanel from '../components/common/RobotSelectorPanel'
 
 const Page = styled.div`
   padding: 32px;
@@ -143,7 +144,6 @@ const PURPOSES = ['Fine-tuning', 'Failure Recovery', 'Benchmark Dataset 생성']
 
 export default function TeleopPage() {
   const { state } = useLearning()
-  const [robots, setRobots] = useState([])
   const [config, setConfig] = useState({
     task: state.selectedTask || '',
     goalEpisodes: 10,
@@ -152,10 +152,6 @@ export default function TeleopPage() {
   })
   const [opening, setOpening] = useState(false)
   const [openError, setOpenError] = useState(null)
-
-  useEffect(() => {
-    getDevices().then(setRobots)
-  }, [])
 
   const canOpen = config.task && config.robotId
 
@@ -210,12 +206,10 @@ export default function TeleopPage() {
 
           <Field>
             <Label>로봇 선택</Label>
-            <Select value={config.robotId} onChange={(e) => setConfig((c) => ({ ...c, robotId: e.target.value }))}>
-              <option value="">선택하세요</option>
-              {robots.map((r) => (
-                <option key={r.id} value={r.id}>{r.name} ({r.status})</option>
-              ))}
-            </Select>
+            <RobotSelectorPanel
+              value={config.robotId}
+              onChange={(id) => setConfig((c) => ({ ...c, robotId: id }))}
+            />
           </Field>
 
           <Field>

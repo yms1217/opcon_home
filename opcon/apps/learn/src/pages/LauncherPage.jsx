@@ -241,11 +241,11 @@ export default function LauncherPage() {
   }
 
   const handleBack = () => {
-    navigatingToChild.current = true
     setPhase('task')
   }
 
   const handleMethodNavigate = (route) => {
+    navigatingToChild.current = true
     navigate(route)
   }
 
